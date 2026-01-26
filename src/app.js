@@ -7,6 +7,7 @@ const { SyslogReceiver } = require('./receivers/udp-receiver');
 const eventBus = require('./events/event-bus');
 const { PaloAltoParser } = require('./parsers/palo-alto-parser');
 const { DeadLetterQueue } = require('./utils/error-handler');
+const { EnrichmentPipeline } = require('./enrichment/enrichment-pipeline');
 
 // Note about privileged ports
 console.log('========================================');
@@ -25,9 +26,10 @@ const receiver = new SyslogReceiver({
   address: '0.0.0.0'
 });
 
-// Create parser and dead letter queue
+// Create parser, dead letter queue, and enrichment pipeline
 const parser = new PaloAltoParser();
 const dlq = new DeadLetterQueue();
+const enrichmentPipeline = new EnrichmentPipeline(eventBus);
 
 // Metrics tracking
 let totalReceived = 0;
@@ -64,6 +66,15 @@ eventBus.on('parsed', (event) => {
   }));
 });
 
+// Handle enriched events (primary output)
+eventBus.on('enriched', (event) => {
+  const geoInfo = event.geo
+    ? `${event.geo.city || 'Unknown'}, ${event.geo.country || 'Unknown'} (${event.geo.latitude}, ${event.geo.longitude})`
+    : 'No geo data';
+
+  console.log(`[ENRICHED] ${event.timestamp} | ${event.sourceIP} -> ${event.destinationIP} | ${event.threatType} | ${geoInfo} | Enrichment: ${event.enrichmentTime}ms`);
+});
+
 // Handle parse errors
 eventBus.on('parse-error', (error) => {
   totalFailed++;
@@ -76,17 +87,22 @@ setInterval(() => {
   console.log(`METRICS: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}, Success Rate=${successRate}%`);
 }, 10000);
 
-// Start the receiver
-receiver.listen()
-  .then((addr) => {
+// Async startup function
+async function start() {
+  try {
+    // Initialize enrichment pipeline first
+    await enrichmentPipeline.initialize();
+    console.log('');
+
+    // Start the receiver
+    const addr = await receiver.listen();
     console.log('Receiver started successfully');
     console.log(`Listening on: ${addr.address}:${addr.port}`);
     console.log('');
     console.log('Waiting for syslog messages...');
     console.log('');
-  })
-  .catch((err) => {
-    console.error('Failed to start receiver:', err);
+  } catch (err) {
+    console.error('Failed to start application:', err);
     if (err.code === 'EACCES') {
       console.error('');
       console.error('Permission denied: Port 514 requires root privileges.');
@@ -94,7 +110,11 @@ receiver.listen()
       console.error('');
     }
     process.exit(1);
-  });
+  }
+}
+
+// Start the application
+start();
 
 // Graceful shutdown handling
 process.on('SIGINT', () => {
@@ -105,8 +125,9 @@ process.on('SIGINT', () => {
   const successRate = totalReceived > 0 ? (totalParsed / totalReceived * 100).toFixed(2) : 0;
   console.log(`Final metrics: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}, Success Rate=${successRate}%`);
 
-  // Stop the receiver
+  // Stop components
   receiver.stop();
+  enrichmentPipeline.shutdown();
 
   // Exit cleanly
   process.exit(0);
@@ -116,6 +137,7 @@ process.on('SIGTERM', () => {
   console.log('');
   console.log('Received SIGTERM, shutting down...');
   receiver.stop();
+  enrichmentPipeline.shutdown();
   process.exit(0);
 });
 

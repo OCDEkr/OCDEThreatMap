@@ -35,6 +35,26 @@ class PaloAltoParser extends EventEmitter {
         throw new Error('Parser returned empty result');
       }
 
+      // Extract structured data from message if present
+      // nsyslog-parser-2 doesn't extract this into structuredData for our format
+      if (parsed.message && parsed.message.includes('[')) {
+        const structMatch = parsed.message.match(/\[([^\]]+)\]/);
+        if (structMatch) {
+          const structData = {};
+          const kvPairs = structMatch[1].split(' ');
+          kvPairs.forEach(kv => {
+            if (kv.includes('=')) {
+              const [key, value] = kv.split('=');
+              if (key && value) {
+                structData[key] = value;
+              }
+            }
+          });
+          // Add extracted structured data to parsed object
+          parsed.structuredData = structData;
+        }
+      }
+
       // Extract action first to filter for DENY logs only
       const action = this.extractAction(parsed);
       if (!action || action.toLowerCase() !== 'deny') {
@@ -83,16 +103,26 @@ class PaloAltoParser extends EventEmitter {
    * @returns {string|null} - Source IP or null if not found
    */
   extractSourceIP(parsed) {
-    // Try structured data first
+    // Try structured data first (rare but possible)
     if (parsed.structuredData && parsed.structuredData.src) {
       return this.validateIPv4(parsed.structuredData.src) ? parsed.structuredData.src : null;
     }
 
-    // Fallback to message regex
     if (parsed.message) {
-      const match = parsed.message.match(/src=([0-9.]+)/i);
-      if (match && match[1]) {
-        return this.validateIPv4(match[1]) ? match[1] : null;
+      // Try key=value format first (e.g., src=10.0.0.100)
+      const kvMatch = parsed.message.match(/src=([0-9.]+)/i);
+      if (kvMatch && kvMatch[1]) {
+        return this.validateIPv4(kvMatch[1]) ? kvMatch[1] : null;
+      }
+
+      // Try CSV format (Palo Alto CSV: field 8 is source IP)
+      // Format: 1,date,serial,type,subtype,?,date2,src_ip,dst_ip,...
+      const csvParts = parsed.message.split(',');
+      if (csvParts.length > 9 && csvParts[0] === '1') { // '1' indicates CSV format version
+        const srcIP = csvParts[7]; // Index 7 is field 8 (0-indexed)
+        if (srcIP && this.validateIPv4(srcIP)) {
+          return srcIP;
+        }
       }
     }
 
@@ -105,16 +135,25 @@ class PaloAltoParser extends EventEmitter {
    * @returns {string|null} - Destination IP or null if not found
    */
   extractDestinationIP(parsed) {
-    // Try structured data first
+    // Try structured data first (rare but possible)
     if (parsed.structuredData && parsed.structuredData.dst) {
       return this.validateIPv4(parsed.structuredData.dst) ? parsed.structuredData.dst : null;
     }
 
-    // Fallback to message regex
     if (parsed.message) {
-      const match = parsed.message.match(/dst=([0-9.]+)/i);
-      if (match && match[1]) {
-        return this.validateIPv4(match[1]) ? match[1] : null;
+      // Try key=value format first (e.g., dst=198.51.100.25)
+      const kvMatch = parsed.message.match(/dst=([0-9.]+)/i);
+      if (kvMatch && kvMatch[1]) {
+        return this.validateIPv4(kvMatch[1]) ? kvMatch[1] : null;
+      }
+
+      // Try CSV format (Palo Alto CSV: field 9 is destination IP)
+      const csvParts = parsed.message.split(',');
+      if (csvParts.length > 9 && csvParts[0] === '1') { // '1' indicates CSV format version
+        const dstIP = csvParts[8]; // Index 8 is field 9 (0-indexed)
+        if (dstIP && this.validateIPv4(dstIP)) {
+          return dstIP;
+        }
       }
     }
 
@@ -137,11 +176,29 @@ class PaloAltoParser extends EventEmitter {
       }
     }
 
-    // Fallback to message parsing
     if (parsed.message) {
-      const match = parsed.message.match(/threat[_-]?type[=:]\s*(\w+)/i);
-      if (match && match[1]) {
-        return this.categorizeThreat(match[1]);
+      // Try key=value format first (e.g., threat_type=intrusion)
+      const kvMatch = parsed.message.match(/threat[_-]?type[=:]\s*(\w+)/i);
+      if (kvMatch && kvMatch[1]) {
+        return this.categorizeThreat(kvMatch[1]);
+      }
+
+      // Try CSV format (Palo Alto CSV: field 34 is threat/content type)
+      const csvParts = parsed.message.split(',');
+      if (csvParts.length > 33 && csvParts[0] === '1') { // '1' indicates CSV format version
+        const threatType = csvParts[33]; // Index 33 is field 34 (0-indexed)
+        if (threatType) {
+          return this.categorizeThreat(threatType);
+        }
+      }
+
+      // Also check field 4 (type) and field 5 (subtype) for THREAT logs
+      if (csvParts.length > 5 && csvParts[0] === '1') {
+        const logType = csvParts[3]; // THREAT, TRAFFIC, etc.
+        const subType = csvParts[4]; // url, vulnerability, spyware, etc.
+        if (logType === 'THREAT' && subType) {
+          return this.categorizeThreat(subType);
+        }
       }
     }
 
@@ -159,11 +216,21 @@ class PaloAltoParser extends EventEmitter {
       return parsed.structuredData.action.toLowerCase();
     }
 
-    // Fallback to message regex
     if (parsed.message) {
-      const match = parsed.message.match(/action[=:]\s*(\w+)/i);
-      if (match && match[1]) {
-        return match[1].toLowerCase();
+      // Try key=value format first (e.g., action=deny)
+      const kvMatch = parsed.message.match(/action[=:]\s*(\w+)/i);
+      if (kvMatch && kvMatch[1]) {
+        return kvMatch[1].toLowerCase();
+      }
+
+      // Try CSV format (Palo Alto CSV: field 31 is action for THREAT logs)
+      const csvParts = parsed.message.split(',');
+      if (csvParts.length > 30 && csvParts[0] === '1') { // '1' indicates CSV format version
+        const action = csvParts[30]; // Index 30 is field 31 (0-indexed)
+        if (action && (action.toLowerCase() === 'deny' || action.toLowerCase() === 'allow' ||
+                      action.toLowerCase() === 'drop' || action.toLowerCase() === 'block')) {
+          return action.toLowerCase();
+        }
       }
     }
 
@@ -179,12 +246,14 @@ class PaloAltoParser extends EventEmitter {
     const threatLower = threat.toLowerCase();
 
     if (threatLower.includes('malware') || threatLower.includes('virus') ||
-        threatLower.includes('trojan') || threatLower.includes('worm')) {
+        threatLower.includes('trojan') || threatLower.includes('worm') ||
+        threatLower.includes('url') || threatLower.includes('spyware')) {
       return 'malware';
     }
 
     if (threatLower.includes('intrusion') || threatLower.includes('exploit') ||
-        threatLower.includes('vulnerability') || threatLower.includes('attack')) {
+        threatLower.includes('vulnerability') || threatLower.includes('attack') ||
+        threatLower.includes('brute')) {
       return 'intrusion';
     }
 

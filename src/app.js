@@ -5,6 +5,8 @@
 
 const { SyslogReceiver } = require('./receivers/udp-receiver');
 const eventBus = require('./events/event-bus');
+const { PaloAltoParser } = require('./parsers/palo-alto-parser');
+const { DeadLetterQueue } = require('./utils/error-handler');
 
 // Note about privileged ports
 console.log('========================================');
@@ -23,6 +25,15 @@ const receiver = new SyslogReceiver({
   address: '0.0.0.0'
 });
 
+// Create parser and dead letter queue
+const parser = new PaloAltoParser();
+const dlq = new DeadLetterQueue();
+
+// Metrics tracking
+let totalReceived = 0;
+let totalParsed = 0;
+let totalFailed = 0;
+
 // Wire receiver to event bus
 // When receiver gets a message, forward it to the event bus
 receiver.on('message', (data) => {
@@ -35,15 +46,35 @@ receiver.on('error', (err) => {
   // Don't crash - continue operation
 });
 
-// Log messages received via event bus (first 100 chars for visibility)
+// Wire eventBus 'message' to parser
 eventBus.on('message', (data) => {
-  const preview = data.raw.substring(0, 100);
-  const truncated = data.raw.length > 100 ? '...' : '';
-  console.log(`Received syslog message from ${data.remoteAddress}:${data.remotePort}`);
-  console.log(`  Timestamp: ${data.timestamp}`);
-  console.log(`  Preview: ${preview}${truncated}`);
-  console.log('');
+  totalReceived++;
+  parser.parse(data.raw);
 });
+
+// Handle parsed events
+eventBus.on('parsed', (event) => {
+  totalParsed++;
+  console.log('PARSED:', JSON.stringify({
+    timestamp: event.timestamp,
+    sourceIP: event.sourceIP,
+    destinationIP: event.destinationIP,
+    threatType: event.threatType,
+    action: event.action
+  }));
+});
+
+// Handle parse errors
+eventBus.on('parse-error', (error) => {
+  totalFailed++;
+  dlq.add(error.rawMessage, new Error(error.error));
+});
+
+// Metrics reporting (every 10 seconds)
+setInterval(() => {
+  const successRate = totalReceived > 0 ? (totalParsed / totalReceived * 100).toFixed(2) : 0;
+  console.log(`METRICS: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}, Success Rate=${successRate}%`);
+}, 10000);
 
 // Start the receiver
 receiver.listen()
@@ -69,6 +100,10 @@ receiver.listen()
 process.on('SIGINT', () => {
   console.log('');
   console.log('Shutting down...');
+
+  // Log final metrics
+  const successRate = totalReceived > 0 ? (totalParsed / totalReceived * 100).toFixed(2) : 0;
+  console.log(`Final metrics: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}, Success Rate=${successRate}%`);
 
   // Stop the receiver
   receiver.stop();

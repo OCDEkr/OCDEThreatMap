@@ -16,8 +16,10 @@ console.log('Run with sudo or use \'sudo setcap cap_net_bind_service=+ep $(which
 console.log('');
 
 // Create syslog receiver instance
+// Use environment variable for port, defaulting to 514
+const port = parseInt(process.env.SYSLOG_PORT || '514', 10);
 const receiver = new SyslogReceiver({
-  port: 514,
+  port: port,
   address: '0.0.0.0'
 });
 

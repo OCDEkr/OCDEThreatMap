@@ -3,3 +3,6 @@ node_modules/
 .env
 logs/
 *.log
+
+# MaxMind GeoLite2 database (large binary, must download separately)
+data/*.mmdb

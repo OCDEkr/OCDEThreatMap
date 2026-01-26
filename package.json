@@ -11,8 +11,9 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "nsyslog-parser-2": "^0.9.12",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "maxmind": "^5.0.3",
+    "nsyslog-parser-2": "^0.9.12"
   },
   "keywords": [
     "syslog",

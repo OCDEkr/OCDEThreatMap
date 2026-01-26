@@ -1,0 +1,26 @@
+{
+  "name": "ocde-threat-map",
+  "version": "1.0.0",
+  "description": "Real-time threat visualization system for OCDE firewall logs",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "nsyslog-parser-2": "^0.9.12",
+    "express": "^5.1.0"
+  },
+  "keywords": [
+    "syslog",
+    "threat",
+    "visualization",
+    "real-time",
+    "firewall"
+  ],
+  "author": "",
+  "license": "ISC"
+}

@@ -46,7 +46,13 @@
       // Performance optimizations
       .pointsMerge(true)  // Merge point meshes for performance
       .arcsTransitionDuration(0)  // No transition animation overhead
-      .arcDashAnimateTime(1000);  // 1 second arc animation duration
+      .arcDashAnimateTime(5000)  // 5 second arc animation duration (slower)
+      // Arc appearance - thicker arcs with animated dashes and dynamic colors
+      .arcColor(d => d.color)  // Use color array from arc data
+      .arcStroke(d => d.stroke || 0.5)  // Use stroke from arc data or default 0.5
+      .arcDashLength(0.3)      // Length of arc segments (creates animated dash effect)
+      .arcDashGap(0.15)        // Gap between segments
+      .arcDashInitialGap(() => Math.random());  // Random start positions for visual variety
 
     // Configure renderer for performance
     const renderer = globeInstance.renderer();

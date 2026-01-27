@@ -10,9 +10,16 @@
   // Arc storage and configuration
   let arcs = [];
   const MAX_ARCS = 500;              // Maximum concurrent arcs for performance
-  const ARC_LIFETIME = 2000;         // Arc lifetime in milliseconds (2 seconds)
-  const ARC_COLOR_START = 'rgba(255, 165, 0, 0)';   // Orange transparent (origin)
-  const ARC_COLOR_END = 'rgba(255, 165, 0, 1)';     // Orange opaque (destination)
+  const ARC_LIFETIME = 5000;         // Arc lifetime in milliseconds (5 seconds for slower animation)
+
+  // Threat-type color mapping
+  const THREAT_COLORS = {
+    malware: ['rgba(255, 0, 0, 0)', 'rgba(255, 0, 0, 1)'],        // Red
+    intrusion: ['rgba(255, 140, 0, 0)', 'rgba(255, 140, 0, 1)'],  // Dark orange
+    ddos: ['rgba(138, 43, 226, 0)', 'rgba(138, 43, 226, 1)'],     // Purple
+    deny: ['rgba(255, 165, 0, 0)', 'rgba(255, 165, 0, 1)'],       // Orange (default)
+    default: ['rgba(255, 165, 0, 0)', 'rgba(255, 165, 0, 1)']     // Orange fallback
+  };
 
   // OCDE location (Orange County, CA)
   const OCDE_LAT = 33.7490;
@@ -53,16 +60,27 @@
       return;
     }
 
-    // Create arc object
+    // Get threat type and corresponding color
+    const threatType = (attackEvent.attack && attackEvent.attack.threat_type) ||
+                       attackEvent.threatType ||
+                       'default';
+    const arcColor = THREAT_COLORS[threatType] || THREAT_COLORS.default;
+
+    // Debug logging for color assignment
+    console.log('[Arc Color] Threat type:', threatType, '| Color:', arcColor, '| Event:', attackEvent);
+
+    // Create arc object with enhanced properties
     const arc = {
       startLat: sourceCoords[0],
       startLng: sourceCoords[1],
       endLat: OCDE_LAT,
       endLng: OCDE_LNG,
-      color: [ARC_COLOR_START, ARC_COLOR_END],
+      color: arcColor,
+      stroke: 0.8,                    // Thicker arcs
       // Metadata for debugging
       _countryCode: countryCode,
-      _sourceIP: attackEvent.sourceIP,
+      _sourceIP: attackEvent.sourceIP || (attackEvent.attack && attackEvent.attack.source_ip),
+      _threatType: threatType,
       _timestamp: Date.now()
     };
 
@@ -80,8 +98,8 @@
     globe.arcsData(arcs);
 
     // Log arc creation
-    console.debug('Arc added:', countryCode, '->', 'OCDE',
-                  `(${arcs.length}/${MAX_ARCS} active)`);
+    console.log('[Arc Added]', countryCode, '->', 'OCDE',
+                `[${threatType}]`, `Color: ${arcColor[1]}`, `(${arcs.length}/${MAX_ARCS} active)`);
 
     // Schedule automatic removal after animation completes
     setTimeout(() => {
@@ -126,8 +144,7 @@
       maxArcs: MAX_ARCS,
       lifetime: ARC_LIFETIME,
       destination: { lat: OCDE_LAT, lng: OCDE_LNG },
-      colorStart: ARC_COLOR_START,
-      colorEnd: ARC_COLOR_END
+      threatColors: THREAT_COLORS
     };
   };
 

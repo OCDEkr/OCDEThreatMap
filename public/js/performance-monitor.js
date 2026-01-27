@@ -48,13 +48,17 @@
 
     // Monitor FPS and apply degradation
     let frameCount = 0;
+    let lastTime = performance.now();
+
     function monitorFrame() {
       statsPanel.begin();
 
-      // Get current FPS from stats.js
-      // Stats.js doesn't expose getFPS(), so we calculate from internal state
-      const currentFPS = 1000 / statsPanel.dom.children[0].children[0].children[1].textContent.split(' ')[0];
-      fpsSamples.push(isNaN(currentFPS) ? 60 : currentFPS);
+      // Calculate FPS from frame time
+      const now = performance.now();
+      const deltaTime = now - lastTime;
+      lastTime = now;
+      const currentFPS = deltaTime > 0 ? 1000 / deltaTime : 60;
+      fpsSamples.push(currentFPS);
 
       // Keep only last 60 samples (1 second at 60 FPS)
       if (fpsSamples.length > 60) {

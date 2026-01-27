@@ -13,16 +13,21 @@ const { WebSocket } = require('ws');
  */
 function broadcastAttack(wss, event) {
   // Check if event has geo data from enrichment
+  // GeoLocator returns `country` field with ISO code
   if (!event.geo || !event.geo.country) {
     console.log('[Attack Broadcaster] Skipping event without geo data');
     return false;
   }
 
   // Prepare broadcast message
+  // Add country_code alias for dashboard compatibility
   const message = {
     type: 'enriched',
     timestamp: event.timestamp || new Date().toISOString(),
-    geo: event.geo,
+    geo: {
+      ...event.geo,
+      country_code: event.geo.country  // Dashboard expects country_code
+    },
     attack: {
       source_ip: event.sourceIP,
       destination_ip: event.destinationIP,

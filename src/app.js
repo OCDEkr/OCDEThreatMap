@@ -4,6 +4,9 @@
  * Provides HTTP server for dashboard and WebSocket connections
  */
 
+// Load environment variables from .env file
+require('dotenv').config();
+
 const http = require('http');
 const path = require('path');
 const express = require('express');

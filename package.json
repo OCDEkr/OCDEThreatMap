@@ -17,6 +17,7 @@
     "lru-cache": "^11.2.5",
     "maxmind": "^5.0.3",
     "nsyslog-parser-2": "^0.9.12",
+    "reconnecting-websocket": "^4.4.0",
     "ws": "^8.19.0"
   },
   "keywords": [

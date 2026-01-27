@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCDE Cyber Threat Map - Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #0a0e27;
+      color: #e0e0e0;
+      padding: 20px;
+      font-size: 16px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      color: #00d9ff;
+      text-align: center;
+    }
+
+    h2 {
+      font-size: 1.5em;
+      margin-bottom: 15px;
+      color: #00d9ff;
+    }
+
+    /* Login Form */
+    #login-form {
+      max-width: 400px;
+      margin: 100px auto;
+      background: #1a1f3a;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,217,255,0.2);
+    }
+
+    #login-form h2 {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 5px;
+      color: #b0b0b0;
+    }
+
+    input[type="text"],
+    input[type="password"] {
+      width: 100%;
+      padding: 12px;
+      background: #0a0e27;
+      border: 1px solid #00d9ff;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 16px;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus {
+      outline: none;
+      border-color: #00ffaa;
+    }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #00d9ff;
+      border: none;
+      border-radius: 4px;
+      color: #0a0e27;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+
+    button:hover {
+      background: #00ffaa;
+    }
+
+    .error-message {
+      color: #ff4444;
+      margin-top: 10px;
+      text-align: center;
+      display: none;
+    }
+
+    /* Dashboard */
+    #dashboard {
+      display: none;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #00d9ff;
+    }
+
+    .header h1 {
+      margin: 0;
+    }
+
+    #logout-btn {
+      width: auto;
+      padding: 10px 25px;
+      background: #ff4444;
+    }
+
+    #logout-btn:hover {
+      background: #ff6666;
+    }
+
+    /* Connection Status */
+    #connection-status {
+      font-size: 1.2em;
+      padding: 15px 25px;
+      border-radius: 6px;
+      text-align: center;
+      margin-bottom: 30px;
+      font-weight: bold;
+    }
+
+    .status-connected {
+      background: #00aa44;
+      color: #ffffff;
+    }
+
+    .status-disconnected {
+      background: #ff4444;
+      color: #ffffff;
+    }
+
+    .status-error {
+      background: #ff8800;
+      color: #ffffff;
+    }
+
+    /* Event Log */
+    #event-log {
+      background: #1a1f3a;
+      padding: 20px;
+      border-radius: 8px;
+      min-height: 600px;
+      max-height: 800px;
+      overflow-y: auto;
+    }
+
+    .attack-event {
+      background: #0a0e27;
+      border-left: 4px solid #ff4444;
+      padding: 15px 20px;
+      margin-bottom: 15px;
+      border-radius: 4px;
+      font-size: 1.1em;
+      line-height: 1.6;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .attack-event:hover {
+      transform: translateX(5px);
+      box-shadow: 0 2px 10px rgba(255,68,68,0.3);
+    }
+
+    .attack-event strong {
+      color: #00d9ff;
+    }
+
+    .attack-event .country {
+      color: #00ffaa;
+    }
+
+    .attack-event .timestamp {
+      color: #888;
+      font-size: 0.9em;
+    }
+
+    /* Scrollbar styling */
+    #event-log::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    #event-log::-webkit-scrollbar-track {
+      background: #0a0e27;
+    }
+
+    #event-log::-webkit-scrollbar-thumb {
+      background: #00d9ff;
+      border-radius: 5px;
+    }
+
+    #event-log::-webkit-scrollbar-thumb:hover {
+      background: #00ffaa;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Login Form -->
+    <form id="login-form">
+      <h2>OCDE Threat Map Login</h2>
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password">
+      </div>
+      <button type="submit">Login</button>
+      <div class="error-message" id="login-error">Invalid credentials</div>
+    </form>
+
+    <!-- Dashboard -->
+    <div id="dashboard">
+      <div class="header">
+        <h1>OCDE Cyber Threat Map</h1>
+        <button id="logout-btn">Logout</button>
+      </div>
+
+      <div id="connection-status">Connecting...</div>
+
+      <h2>Real-Time Attack Events</h2>
+      <div id="event-log"></div>
+    </div>
+  </div>
+
+  <!-- ReconnectingWebSocket library -->
+  <script src="/js/reconnecting-websocket.min.js"></script>
+  <!-- WebSocket client -->
+  <script src="/js/ws-client.js"></script>
+</body>
+</html>

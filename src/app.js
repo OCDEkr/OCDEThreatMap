@@ -5,6 +5,7 @@
  */
 
 const http = require('http');
+const path = require('path');
 const express = require('express');
 const bodyParser = require('body-parser');
 const { SyslogReceiver } = require('./receivers/udp-receiver');
@@ -13,6 +14,7 @@ const { PaloAltoParser } = require('./parsers/palo-alto-parser');
 const { DeadLetterQueue } = require('./utils/error-handler');
 const { EnrichmentPipeline } = require('./enrichment/enrichment-pipeline');
 const { sessionParser } = require('./middleware/session');
+const { requireAuth } = require('./middleware/auth-check');
 const loginRouter = require('./routes/login');
 const logoutRouter = require('./routes/logout');
 const { setupWebSocketServer } = require('./websocket/ws-server');
@@ -35,9 +37,25 @@ const server = http.createServer(app);
 app.use(bodyParser.json());
 app.use(sessionParser);
 
+// Serve static files from public directory
+app.use(express.static('public'));
+
+// Serve reconnecting-websocket library from node_modules
+app.use('/js/reconnecting-websocket.min.js', express.static('node_modules/reconnecting-websocket/dist/reconnecting-websocket-iife.min.js'));
+
 // Mount routes
 app.use('/login', loginRouter);
 app.use('/logout', logoutRouter);
+
+// Protected dashboard route
+app.get('/dashboard', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+// Root redirect to dashboard
+app.get('/', (req, res) => {
+  res.redirect('/dashboard');
+});
 
 // Create syslog receiver instance
 // Use environment variable for port, defaulting to 514

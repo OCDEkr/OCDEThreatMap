@@ -1,13 +1,20 @@
 /**
  * Application Entry Point
  * Wires UDP syslog receiver to event bus for message processing
+ * Provides HTTP server for dashboard and WebSocket connections
  */
 
+const http = require('http');
+const express = require('express');
+const bodyParser = require('body-parser');
 const { SyslogReceiver } = require('./receivers/udp-receiver');
 const eventBus = require('./events/event-bus');
 const { PaloAltoParser } = require('./parsers/palo-alto-parser');
 const { DeadLetterQueue } = require('./utils/error-handler');
 const { EnrichmentPipeline } = require('./enrichment/enrichment-pipeline');
+const { sessionParser } = require('./middleware/session');
+const loginRouter = require('./routes/login');
+const logoutRouter = require('./routes/logout');
 
 // Note about privileged ports
 console.log('========================================');
@@ -17,6 +24,18 @@ console.log('');
 console.log('Note: Port 514 requires root privileges.');
 console.log('Run with sudo or use \'sudo setcap cap_net_bind_service=+ep $(which node)\' for non-root binding.');
 console.log('');
+
+// Create Express app and HTTP server
+const app = express();
+const server = http.createServer(app);
+
+// Configure Express middleware
+app.use(bodyParser.json());
+app.use(sessionParser);
+
+// Mount routes
+app.use('/login', loginRouter);
+app.use('/logout', logoutRouter);
 
 // Create syslog receiver instance
 // Use environment variable for port, defaulting to 514
@@ -94,7 +113,12 @@ async function start() {
     await enrichmentPipeline.initialize();
     console.log('');
 
-    // Start the receiver
+    // Start HTTP server
+    server.listen(3000, () => {
+      console.log('HTTP server listening on port 3000');
+    });
+
+    // Start the syslog receiver
     const addr = await receiver.listen();
     console.log('Receiver started successfully');
     console.log(`Listening on: ${addr.address}:${addr.port}`);
@@ -126,6 +150,9 @@ process.on('SIGINT', () => {
   console.log(`Final metrics: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}, Success Rate=${successRate}%`);
 
   // Stop components
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
   receiver.stop();
   enrichmentPipeline.shutdown();
 
@@ -136,6 +163,7 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   console.log('');
   console.log('Received SIGTERM, shutting down...');
+  server.close();
   receiver.stop();
   enrichmentPipeline.shutdown();
   process.exit(0);

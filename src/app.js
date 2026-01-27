@@ -15,6 +15,7 @@ const { EnrichmentPipeline } = require('./enrichment/enrichment-pipeline');
 const { sessionParser } = require('./middleware/session');
 const loginRouter = require('./routes/login');
 const logoutRouter = require('./routes/logout');
+const { setupWebSocketServer } = require('./websocket/ws-server');
 
 // Note about privileged ports
 console.log('========================================');
@@ -117,6 +118,9 @@ async function start() {
     server.listen(3000, () => {
       console.log('HTTP server listening on port 3000');
     });
+
+    // Setup WebSocket server
+    setupWebSocketServer(server, sessionParser);
 
     // Start the syslog receiver
     const addr = await receiver.listen();

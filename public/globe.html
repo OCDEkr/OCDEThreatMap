@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCDE Cyber Threat Map</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Courier New', monospace;
+      background: #000;
+      color: #00ff00;
+      overflow: hidden;
+    }
+
+    #globe {
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+    }
+
+    /* Stats panel for attack counts (will be added in Phase 5) */
+    #stats-panel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      color: #00ff00;
+      padding: 20px;
+      border: 2px solid #00ff00;
+      min-width: 300px;
+      font-size: 24px;
+      display: none; /* Hidden until Phase 5 */
+    }
+
+    /* Loading indicator */
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 24px;
+      color: #00ff00;
+      text-align: center;
+    }
+
+    /* Error display */
+    #error {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 18px;
+      color: #ff0000;
+      background: rgba(0, 0, 0, 0.9);
+      padding: 30px;
+      border: 2px solid #ff0000;
+      display: none;
+      max-width: 600px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Globe container -->
+  <div id="globe"></div>
+
+  <!-- Loading indicator -->
+  <div id="loading">
+    <div>Loading Globe...</div>
+    <div style="font-size: 14px; margin-top: 10px;">Initializing visualization...</div>
+  </div>
+
+  <!-- Error display -->
+  <div id="error"></div>
+
+  <!-- Stats panel (Phase 5) -->
+  <div id="stats-panel">
+    <div style="font-size: 48px; margin-bottom: 20px;">
+      <span id="total-attacks">0</span>
+    </div>
+    <div>Attacks/min: <span id="apm">0</span></div>
+    <div>Top source: <span id="top-country">N/A</span></div>
+  </div>
+
+  <!-- Load Three.js from CDN (required peer dependency) -->
+  <script src="//unpkg.com/three@0.160.0/build/three.min.js"></script>
+
+  <!-- Load Globe.GL from CDN -->
+  <script src="//unpkg.com/globe.gl@2.27.0/dist/globe.gl.min.js"></script>
+
+  <!-- Load local globe module -->
+  <script src="/js/globe.js"></script>
+
+  <!-- Load coordinate mapping (Task 2) -->
+  <script src="/js/coordinates.js"></script>
+
+  <!-- Load arc animation module (Task 2) -->
+  <script src="/js/arcs.js"></script>
+
+  <!-- Initialize globe on DOM ready -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const loading = document.getElementById('loading');
+      const errorDiv = document.getElementById('error');
+
+      try {
+        // Check if libraries loaded
+        if (typeof THREE === 'undefined') {
+          throw new Error('Three.js failed to load from CDN');
+        }
+        if (typeof Globe === 'undefined') {
+          throw new Error('Globe.GL failed to load from CDN');
+        }
+
+        // Initialize globe
+        const globe = window.initGlobe('globe');
+
+        if (globe) {
+          // Hide loading indicator
+          loading.style.display = 'none';
+          console.log('OCDE Cyber Threat Map initialized successfully');
+
+          // Add globe controls info to console
+          console.log('Controls:');
+          console.log('  - Left mouse: Rotate globe');
+          console.log('  - Right mouse: Pan view');
+          console.log('  - Scroll: Zoom in/out');
+        } else {
+          throw new Error('Failed to initialize globe');
+        }
+      } catch (err) {
+        // Show error
+        console.error('Initialization error:', err);
+        loading.style.display = 'none';
+        errorDiv.style.display = 'block';
+        errorDiv.innerHTML = `
+          <div style="font-size: 24px; margin-bottom: 20px;">Initialization Error</div>
+          <div>${err.message}</div>
+          <div style="margin-top: 20px; font-size: 14px;">
+            Check browser console for details.
+          </div>
+        `;
+      }
+    });
+  </script>
+</body>
+</html>

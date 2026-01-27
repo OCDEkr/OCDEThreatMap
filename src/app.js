@@ -45,6 +45,9 @@ app.use(express.static('public'));
 
 // Serve reconnecting-websocket library from node_modules
 app.use('/js/reconnecting-websocket.min.js', express.static('node_modules/reconnecting-websocket/dist/reconnecting-websocket-iife.min.js'));
+app.get('/reconnecting-websocket', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'node_modules', 'reconnecting-websocket', 'dist', 'reconnecting-websocket-iife.min.js'));
+});
 
 // Mount routes
 app.use('/login', loginRouter);
@@ -52,7 +55,7 @@ app.use('/logout', logoutRouter);
 
 // Protected dashboard route
 app.get('/dashboard', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html'));
 });
 
 // Root redirect to dashboard

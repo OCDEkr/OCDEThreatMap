@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OCDE Cyber Threat Map</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body>
+  <!-- Globe Container (full screen background) -->
+  <div id="globe"></div>
+
+  <!-- Stats Panel (created by JS, positioned top-right) -->
+  <!-- Connection Status (top-left) -->
+  <div id="connection-status" class="connecting">CONNECTING...</div>
+
+  <!-- Event Log (bottom overlay) -->
+  <div id="event-log">
+    <div id="event-header">RECENT ATTACKS</div>
+    <div id="events-container"></div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="//unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="//unpkg.com/globe.gl@2.27.0/dist/globe.gl.min.js"></script>
+  <script src="//unpkg.com/stats.js@0.17.0/build/stats.min.js"></script>
+
+  <!-- Globe and visualization modules -->
+  <script src="/js/globe.js"></script>
+  <script src="/js/coordinates.js"></script>
+  <script src="/js/arcs.js"></script>
+
+  <!-- Statistics modules -->
+  <script src="/js/stats-metrics.js"></script>
+  <script src="/js/stats-display.js"></script>
+  <script src="/js/performance-monitor.js"></script>
+
+  <!-- Dashboard integration -->
+  <script src="/reconnecting-websocket"></script>
+  <script src="/js/dashboard-client.js"></script>
+
+  <!-- Initialize everything -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Initialize globe
+      window.initGlobe('globe');
+
+      // Create stats panel
+      window.createStatsPanel();
+
+      // Start performance monitoring
+      window.startMonitoring();
+    });
+  </script>
+</body>
+</html>

@@ -68,6 +68,9 @@ function setupWebSocketServer(httpServer, sessionParser) {
   startHeartbeat(wss);
 
   console.log('WebSocket server ready');
+
+  // Return wss for broadcast wiring
+  return wss;
 }
 
 module.exports = { setupWebSocketServer, wss };

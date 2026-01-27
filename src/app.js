@@ -16,6 +16,7 @@ const { sessionParser } = require('./middleware/session');
 const loginRouter = require('./routes/login');
 const logoutRouter = require('./routes/logout');
 const { setupWebSocketServer } = require('./websocket/ws-server');
+const { wireEventBroadcast } = require('./websocket/broadcaster');
 
 // Note about privileged ports
 console.log('========================================');
@@ -120,7 +121,10 @@ async function start() {
     });
 
     // Setup WebSocket server
-    setupWebSocketServer(server, sessionParser);
+    const wss = setupWebSocketServer(server, sessionParser);
+
+    // Wire broadcast to enriched events
+    wireEventBroadcast(wss);
 
     // Start the syslog receiver
     const addr = await receiver.listen();

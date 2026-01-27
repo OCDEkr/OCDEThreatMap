@@ -5,6 +5,7 @@
 
 const { WebSocket } = require('ws');
 const eventBus = require('../events/event-bus');
+const { broadcastAttack } = require('./attack-broadcaster');
 
 // Module-level WebSocket server reference (set by wireEventBroadcast)
 let wss = null;
@@ -55,15 +56,8 @@ function wireEventBroadcast(webSocketServer) {
 
   // Listen to enriched events from EnrichmentPipeline
   eventBus.on('enriched', (event) => {
-    // Format event for client consumption
-    broadcast({
-      type: 'attack',
-      timestamp: event.timestamp,
-      sourceIP: event.sourceIP,
-      destinationIP: event.destinationIP,
-      geo: event.geo,
-      threatType: event.threatType
-    });
+    // Use attack-broadcaster for enriched events
+    broadcastAttack(wss, event);
   });
 
   console.log('Event broadcast wired to enriched events');

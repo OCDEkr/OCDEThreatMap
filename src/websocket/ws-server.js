@@ -6,6 +6,7 @@
 const { WebSocketServer, WebSocket } = require('ws');
 const { authenticateUpgrade } = require('./auth-handler');
 const { startHeartbeat, heartbeatHandler } = require('./heartbeat');
+const { broadcastAttack } = require('./attack-broadcaster');
 
 let wss;
 

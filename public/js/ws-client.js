@@ -38,10 +38,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await response.json();
 
       if (data.success) {
-        // Login successful - show dashboard and connect WebSocket
-        loginForm.style.display = 'none';
-        dashboard.style.display = 'block';
-        connectWebSocket();
+        // Login successful - redirect to globe dashboard
+        window.location.href = '/dashboard';
       } else {
         // Login failed
         loginError.style.display = 'block';
@@ -51,6 +49,12 @@ document.addEventListener('DOMContentLoaded', () => {
       loginError.textContent = 'Connection error - please try again';
       loginError.style.display = 'block';
     }
+  });
+
+  // Handle navigation to globe dashboard
+  const globeDashboardBtn = document.getElementById('globe-dashboard-btn');
+  globeDashboardBtn.addEventListener('click', () => {
+    window.location.href = '/dashboard';
   });
 
   // Handle logout

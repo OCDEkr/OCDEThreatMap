@@ -7,12 +7,77 @@
   <link rel="stylesheet" href="/css/dashboard.css">
 </head>
 <body>
+  <!-- Header with Title -->
+  <div id="header">
+    <div id="header-title">Loading...</div>
+  </div>
+
+  <script>
+    // Load custom heading from settings
+    fetch('/api/settings/heading')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.value) {
+          document.getElementById('header-title').textContent = data.value;
+        } else {
+          document.getElementById('header-title').textContent = 'OCDE Threat Map';
+        }
+      })
+      .catch(() => {
+        document.getElementById('header-title').textContent = 'OCDE Threat Map';
+      });
+  </script>
+
   <!-- Globe Container (full screen background) -->
   <div id="globe"></div>
+
+  <!-- OCDE Logo - left side, vertically centered (loaded dynamically) -->
+  <img id="side-logo" src="/images/OCDE-SUP-blue.png" alt="Logo">
+
+  <script>
+    // Load custom logo if available
+    fetch('/api/logo')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.logoUrl) {
+          document.getElementById('side-logo').src = data.logoUrl + '?t=' + Date.now();
+        }
+      })
+      .catch(() => {
+        // Keep default logo on error
+      });
+  </script>
+
+  <!-- Flat Map Canvas (hidden by default) -->
+  <canvas id="flat-map" style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1;"></canvas>
 
   <!-- Stats Panel (created by JS, positioned top-right) -->
   <!-- Connection Status (top-left) -->
   <div id="connection-status" class="connecting">CONNECTING...</div>
+
+  <!-- View Toggle Button (top-right) -->
+  <button id="view-toggle" class="view-toggle-btn">
+    <span id="view-icon">🌍</span>
+    <span id="view-label">Switch to Flat Map</span>
+  </button>
+
+  <!-- OCDE Filter Toggle Button (top-right, below view toggle) -->
+  <button id="ocde-filter-toggle" class="ocde-filter-btn">
+    <span id="filter-icon">🎯</span>
+    <span id="filter-label">Show All Attacks</span>
+  </button>
+
+  <!-- Globe Rotation Toggle Button (next to filter toggle) -->
+  <button id="rotate-toggle" class="rotate-toggle-btn">
+    <span id="rotate-icon">🔄</span>
+    <span id="rotate-label">Stop Rotation</span>
+  </button>
+
+  <!-- Admin Panel Button (next to rotate toggle) -->
+  <button id="admin-panel-btn" class="admin-panel-btn" onclick="window.location.href='/admin'">
+    <span id="admin-icon">⚙️</span>
+    <span id="admin-label">Admin Panel</span>
+  </button>
 
   <!-- Event Log (bottom overlay) -->
   <div id="event-log">
@@ -25,14 +90,21 @@
   <script src="//unpkg.com/globe.gl@2.27.0/dist/globe.gl.min.js"></script>
   <script src="//unpkg.com/stats.js@0.17.0/build/stats.min.js"></script>
 
+  <!-- D3.js and TopoJSON for flat map -->
+  <script src="//unpkg.com/d3@7.8.5/dist/d3.min.js"></script>
+  <script src="//unpkg.com/topojson@3.0.2/dist/topojson.min.js"></script>
+
   <!-- Globe and visualization modules -->
   <script src="/js/globe.js"></script>
   <script src="/js/coordinates.js"></script>
+  <script src="/js/custom-arcs.js"></script>
   <script src="/js/arcs.js"></script>
+  <script src="/js/flat-map-d3.js"></script>
 
   <!-- Statistics modules -->
   <script src="/js/stats-metrics.js"></script>
   <script src="/js/stats-display.js"></script>
+  <script src="/js/top-stats.js"></script>
   <script src="/js/performance-monitor.js"></script>
 
   <!-- Dashboard integration -->
@@ -45,11 +117,117 @@
       // Initialize globe
       window.initGlobe('globe');
 
-      // Create stats panel
+      // Initialize D3 flat map (hidden by default)
+      window.initD3FlatMap();
+
+      // Create stats panel (attacks per minute display)
       window.createStatsPanel();
 
-      // Start performance monitoring
-      window.startMonitoring();
+      // Create top statistics panels
+      window.createTopCountriesPanel();
+      window.createTopAttacksPanel();
+
+      // Start performance monitoring (DISABLED - FPS monitor removed per user request)
+      // window.startMonitoring();
+
+      // Setup view toggle button
+      const toggleBtn = document.getElementById('view-toggle');
+      const viewIcon = document.getElementById('view-icon');
+      const viewLabel = document.getElementById('view-label');
+      const globeContainer = document.getElementById('globe');
+      const flatMapCanvas = document.getElementById('flat-map');
+      let currentView = 'globe';  // Track current view state
+
+      if (toggleBtn) {
+        toggleBtn.addEventListener('click', function() {
+          if (currentView === 'globe') {
+            // Switch to flat map
+            globeContainer.style.display = 'none';
+            window.startD3FlatMap();
+            currentView = 'flat';
+
+            // Update button label and icon
+            viewIcon.textContent = '🗺️';
+            viewLabel.textContent = 'Switch to Globe';
+
+            console.log('Switched to D3 flat map view');
+          } else {
+            // Switch to globe
+            window.stopD3FlatMap();
+            globeContainer.style.display = 'block';
+            currentView = 'globe';
+
+            // Update button label and icon
+            viewIcon.textContent = '🌍';
+            viewLabel.textContent = 'Switch to Flat Map';
+
+            console.log('Switched to globe view');
+          }
+        });
+      }
+
+      // Setup OCDE filter toggle button
+      const filterBtn = document.getElementById('ocde-filter-toggle');
+      const filterIcon = document.getElementById('filter-icon');
+      const filterLabel = document.getElementById('filter-label');
+
+      if (filterBtn) {
+        filterBtn.addEventListener('click', function() {
+          // Toggle filter state in dashboard-client.js
+          if (window.dashboardClient) {
+            const currentState = window.dashboardClient.getFilterState ? window.dashboardClient.getFilterState() : false;
+            const newState = !currentState;
+
+            if (window.dashboardClient.setFilterState) {
+              window.dashboardClient.setFilterState(newState);
+            }
+
+            // Update button appearance
+            if (newState) {
+              filterLabel.textContent = 'Show All Attacks';
+              filterBtn.classList.add('active');
+              console.log('OCDE filter enabled - showing only OCDE-targeted attacks');
+            } else {
+              filterLabel.textContent = 'OCDE Attacks Only';
+              filterBtn.classList.remove('active');
+              console.log('OCDE filter disabled - showing all attacks');
+            }
+          }
+        });
+      }
+
+      // Setup globe rotation toggle button
+      const rotateBtn = document.getElementById('rotate-toggle');
+      const rotateIcon = document.getElementById('rotate-icon');
+      const rotateLabel = document.getElementById('rotate-label');
+
+      if (rotateBtn) {
+        rotateBtn.addEventListener('click', function() {
+          // Only rotate in globe view, not flat map
+          if (currentView !== 'globe') {
+            console.log('Rotation only available in globe view');
+            return;
+          }
+
+          if (window.isGlobeRotating && window.isGlobeRotating()) {
+            // Stop rotation
+            if (window.stopGlobeRotation) {
+              window.stopGlobeRotation();
+            }
+            rotateBtn.classList.remove('active');
+            rotateLabel.textContent = 'Start Rotation';
+            console.log('Globe rotation stopped');
+          } else {
+            // Start rotation
+            if (window.startGlobeRotation) {
+              window.startGlobeRotation();
+            }
+            rotateBtn.classList.add('active');
+            rotateLabel.textContent = 'Stop Rotation';
+            console.log('Globe rotation started');
+          }
+        });
+      }
     });
   </script>
 </body>

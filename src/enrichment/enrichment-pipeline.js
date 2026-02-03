@@ -1,5 +1,6 @@
 const { EventEmitter } = require('events');
 const { CachedGeoLocator } = require('./cache.js');
+const { isOCDETarget, parseOCDERanges } = require('../utils/ip-matcher.js');
 
 /**
  * EnrichmentPipeline - Enriches parsed events with geolocation data
@@ -11,6 +12,9 @@ class EnrichmentPipeline extends EventEmitter {
     this.eventBus = eventBus;
     this.geoLocator = new CachedGeoLocator();
     this.latencyWarningThreshold = 5000; // 5 seconds per phase requirement
+
+    // Parse OCDE IP ranges from environment
+    this.ocdeRanges = parseOCDERanges(process.env.OCDE_IP_RANGES);
   }
 
   /**
@@ -26,8 +30,8 @@ class EnrichmentPipeline extends EventEmitter {
 
     // Listen to parsed events from PaloAltoParser
     this.eventBus.on('parsed', (event) => {
-      // Use setImmediate for non-blocking processing (per Phase 1 pattern)
-      setImmediate(() => this.enrich(event));
+      // Process immediately - enrichment is fast (cached geo lookup + IP matching)
+      this.enrich(event);
     });
 
     console.log('EnrichmentPipeline initialized and listening for parsed events');
@@ -44,6 +48,9 @@ class EnrichmentPipeline extends EventEmitter {
       // Get geolocation for source IP
       const geoData = this.geoLocator.get(event.sourceIP);
 
+      // Check if destination IP targets OCDE infrastructure
+      const targetingOCDE = isOCDETarget(event.destinationIP, this.ocdeRanges);
+
       // Build enriched event
       const enrichedEvent = {
         ...event,  // Include all original fields
@@ -54,6 +61,7 @@ class EnrichmentPipeline extends EventEmitter {
           country: geoData.country,
           countryName: geoData.countryName
         } : null,
+        isOCDETarget: targetingOCDE,
         enrichmentTime: Date.now() - startTime
       };
 
@@ -72,10 +80,14 @@ class EnrichmentPipeline extends EventEmitter {
     } catch (err) {
       console.error('[EnrichmentPipeline] Enrichment error:', err.message);
 
+      // Even on error, attempt to classify OCDE targeting
+      const targetingOCDE = isOCDETarget(event.destinationIP, this.ocdeRanges);
+
       // Emit original event with error flag (graceful degradation)
       this.eventBus.emit('enriched', {
         ...event,
         geo: null,
+        isOCDETarget: targetingOCDE,
         enrichmentError: err.message,
         enrichmentTime: Date.now() - startTime
       });

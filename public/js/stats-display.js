@@ -31,30 +31,33 @@
     statsPanel.id = 'stats-panel';
     statsPanel.style.cssText = `
       position: absolute;
-      top: 20px;
+      top: 90px;
       right: 20px;
       background: rgba(0, 0, 0, 0.8);
       color: #00ff00;
       font-family: 'Courier New', monospace;
-      font-size: 24px;
+      font-size: 16px;
       border: 2px solid #00ff00;
-      padding: 20px;
-      min-width: 300px;
+      padding: 12px 15px;
+      min-width: 180px;
       z-index: 10;
       border-radius: 5px;
       box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
     `;
 
-    // Add HTML structure with large primary metric
+    // Add HTML structure with smaller metrics
     statsPanel.innerHTML = `
-      <div style="font-size: 48px; margin-bottom: 20px; font-weight: bold; text-shadow: 0 0 10px #00ff00;">
-        ATTACKS: <span id="total-attacks">0</span>
+      <div style="font-size: 28px; margin-bottom: 8px; font-weight: bold; text-shadow: 0 0 10px #00ff00;">
+        <span id="total-attacks">0</span>
       </div>
-      <div style="font-size: 28px; margin-bottom: 10px;">
-        APM: <span id="apm">0</span>
+      <div style="font-size: 14px; margin-bottom: 5px; color: #00cc00;">
+        ATTACKS
       </div>
-      <div style="font-size: 18px; color: #00cc00; margin-top: 15px; border-top: 1px solid #00ff00; padding-top: 10px;">
-        <div>Last update: <span id="last-update">--:--:--</span></div>
+      <div style="font-size: 18px; margin-bottom: 3px;">
+        <span id="apm">0</span> APM
+      </div>
+      <div style="font-size: 11px; color: #00aa00; margin-top: 8px; border-top: 1px solid #00ff00; padding-top: 6px;">
+        <span id="last-update">--:--:--</span>
       </div>
     `;
 

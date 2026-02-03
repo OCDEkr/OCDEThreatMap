@@ -1,10 +1,11 @@
 /**
  * Logout Route
- * Handles session destruction
+ * Handles session destruction with security logging
  */
 
 const express = require('express');
 const router = express.Router();
+const { logSecurityEvent, getClientIP } = require('../utils/security');
 
 /**
  * POST /logout
@@ -12,6 +13,9 @@ const router = express.Router();
  * Returns: { success: boolean, error?: string }
  */
 router.post('/', (req, res) => {
+  const clientIP = getClientIP(req);
+  const username = req.session?.userId || 'unknown';
+
   req.session.destroy((err) => {
     if (err) {
       console.error('Session destruction error:', err);
@@ -20,6 +24,13 @@ router.post('/', (req, res) => {
       });
     }
 
+    logSecurityEvent('logout', {
+      username,
+      ip: clientIP
+    });
+
+    // Clear the session cookie (using custom cookie name)
+    res.clearCookie('ocde.sid');
     res.json({ success: true });
   });
 });

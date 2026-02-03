@@ -6,3 +6,9 @@ logs/
 
 # MaxMind GeoLite2 database (large binary, must download separately)
 data/*.mmdb
+
+# Password hash file (sensitive - never commit)
+data/password.hash
+
+# Uploaded files
+public/uploads/

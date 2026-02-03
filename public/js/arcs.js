@@ -10,7 +10,7 @@
   // Arc storage and configuration
   let arcs = [];
   const MAX_ARCS = 500;              // Maximum concurrent arcs for performance
-  const ARC_LIFETIME = 5000;         // Arc lifetime in milliseconds (5 seconds for slower animation)
+  const ARC_LIFETIME = 1500;         // Arc lifetime in milliseconds (1.5 seconds)
 
   // Threat-type color mapping
   const THREAT_COLORS = {
@@ -25,8 +25,18 @@
   const OCDE_LAT = 33.7490;
   const OCDE_LNG = -117.8705;
 
+  // IP-to-country fallback mapping for common public IPs
+  const IP_TO_COUNTRY = {
+    '1.1.1.1': 'US',        // Cloudflare DNS
+    '8.8.8.8': 'US',        // Google DNS
+    '8.8.4.4': 'US',        // Google DNS alt
+    '1.0.0.1': 'US',        // Cloudflare DNS alt
+    '208.67.222.222': 'US', // OpenDNS
+    '208.67.220.220': 'US'  // OpenDNS alt
+  };
+
   /**
-   * Add attack arc to globe
+   * Add attack arc to globe using custom Three.js arcs
    * @param {Object} attackEvent - Attack event with geo data
    * @param {Object} attackEvent.geo - Geolocation data
    * @param {string} attackEvent.geo.country_code - ISO 3166-1 alpha-2 country code
@@ -34,23 +44,36 @@
    * @param {string} [attackEvent.threatType] - Threat type (for logging)
    */
   window.addAttackArc = function(attackEvent) {
-    // Get globe instance
-    const globe = window.getGlobe();
-    if (!globe) {
-      console.warn('Globe not initialized - cannot add arc');
+    // Check if custom arc system is available
+    if (typeof window.addCustomArc !== 'function') {
+      console.warn('Custom arc system not loaded - cannot add arc');
       return;
     }
 
     // Validate attack event structure
-    if (!attackEvent || !attackEvent.geo) {
-      console.warn('Invalid attack event - missing geo data');
+    if (!attackEvent) {
+      console.warn('Invalid attack event - missing event data');
       return;
     }
 
-    // Get country coordinates
-    const countryCode = attackEvent.geo.country_code || attackEvent.geo.countryCode;
+    // Get country code from geo data or fallback to IP lookup
+    let countryCode = null;
+
+    if (attackEvent.geo) {
+      countryCode = attackEvent.geo.country_code || attackEvent.geo.countryCode || attackEvent.geo.country;
+    }
+
+    // Fallback: Try IP-to-country mapping for common IPs
+    if (!countryCode && attackEvent.sourceIP) {
+      countryCode = IP_TO_COUNTRY[attackEvent.sourceIP];
+      if (countryCode) {
+        console.log('Using IP-to-country fallback for', attackEvent.sourceIP, '→', countryCode);
+      }
+    }
+
+    // If still no country code, skip arc
     if (!countryCode) {
-      console.warn('Attack event missing country_code');
+      console.warn('Attack event missing country_code and no fallback available for IP:', attackEvent.sourceIP);
       return;
     }
 
@@ -60,71 +83,65 @@
       return;
     }
 
-    // Get threat type and corresponding color
+    // Get threat type
     const threatType = (attackEvent.attack && attackEvent.attack.threat_type) ||
                        attackEvent.threatType ||
                        'default';
-    const arcColor = THREAT_COLORS[threatType] || THREAT_COLORS.default;
 
-    // Debug logging for color assignment
-    console.log('[Arc Color] Threat type:', threatType, '| Color:', arcColor, '| Event:', attackEvent);
-
-    // Create arc object with enhanced properties
-    const arc = {
+    // Create arc data for custom arc system
+    const arcData = {
       startLat: sourceCoords[0],
       startLng: sourceCoords[1],
       endLat: OCDE_LAT,
       endLng: OCDE_LNG,
-      color: arcColor,
-      stroke: 0.8,                    // Thicker arcs
-      // Metadata for debugging
+      threatType: threatType,
+      sourceIP: attackEvent.sourceIP || (attackEvent.attack && attackEvent.attack.source_ip),
+      countryCode: countryCode
+    };
+
+    // Add to custom arc system (independent animation)
+    window.addCustomArc(arcData);
+
+    // Track for compatibility (but don't use Globe.GL's arc system)
+    arcs.push({
+      id: `arc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       _countryCode: countryCode,
-      _sourceIP: attackEvent.sourceIP || (attackEvent.attack && attackEvent.attack.source_ip),
       _threatType: threatType,
       _timestamp: Date.now()
-    };
+    });
 
     // Manage arc limit for performance
     if (arcs.length >= MAX_ARCS) {
-      // Remove oldest arc
-      const removed = arcs.shift();
-      console.debug('Max arcs reached - removed oldest arc from', removed._countryCode);
+      arcs.shift();
     }
 
-    // Add arc to array
-    arcs.push(arc);
-
-    // Update globe with new arc data
-    globe.arcsData(arcs);
-
-    // Log arc creation
-    console.log('[Arc Added]', countryCode, '->', 'OCDE',
-                `[${threatType}]`, `Color: ${arcColor[1]}`, `(${arcs.length}/${MAX_ARCS} active)`);
-
-    // Schedule automatic removal after animation completes
+    // Auto-cleanup tracking array
     setTimeout(() => {
-      const index = arcs.indexOf(arc);
-      if (index > -1) {
-        arcs.splice(index, 1);
-        // Update globe (create new array to trigger update)
-        globe.arcsData([...arcs]);
-        console.debug('Arc removed:', arc._countryCode,
-                      `(${arcs.length}/${MAX_ARCS} active)`);
+      if (arcs.length > 0) {
+        arcs.shift();
       }
     }, ARC_LIFETIME);
   };
 
   /**
-   * Clear all arcs from globe
+   * Clear all arcs from globe (both custom and Globe.GL arcs)
    * Useful for reset/testing scenarios
    */
   window.clearArcs = function() {
     arcs = [];
+
+    // Clear custom arcs if available
+    if (typeof window.clearCustomArcs === 'function') {
+      window.clearCustomArcs();
+    }
+
+    // Clear Globe.GL arcs (legacy support)
     const globe = window.getGlobe();
     if (globe) {
       globe.arcsData([]);
-      console.log('All arcs cleared');
     }
+
+    console.log('All arcs cleared');
   };
 
   /**

@@ -37,18 +37,16 @@ class SyslogReceiver extends EventEmitter {
 
       // Handle incoming messages
       this.socket.on('message', (msg, rinfo) => {
-        // Use setImmediate for async processing to avoid blocking event loop
-        setImmediate(() => {
-          const messageData = {
-            raw: msg.toString('utf8'),
-            remoteAddress: rinfo.address,
-            remotePort: rinfo.port,
-            timestamp: new Date().toISOString()
-          };
+        // Process immediately - message parsing is fast (string conversion + emit)
+        const messageData = {
+          raw: msg.toString('utf8'),
+          remoteAddress: rinfo.address,
+          remotePort: rinfo.port,
+          timestamp: new Date().toISOString()
+        };
 
-          // Emit message event for downstream processing
-          this.emit('message', messageData);
-        });
+        // Emit message event for downstream processing
+        this.emit('message', messageData);
       });
 
       // CRITICAL: Handle socket errors to prevent crash

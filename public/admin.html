@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCDE Threat Map - Admin Panel</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Courier New', monospace;
+      background: #000000;
+      color: #00ff00;
+      padding: 20px;
+      font-size: 16px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      color: #00d9ff;
+      text-shadow: 0 0 20px rgba(0, 217, 255, 0.8);
+    }
+
+    h2 {
+      font-size: 1.5em;
+      margin-bottom: 15px;
+      color: #00d9ff;
+      text-shadow: 0 0 10px rgba(0, 217, 255, 0.5);
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #00d9ff;
+      box-shadow: 0 2px 10px rgba(0, 217, 255, 0.3);
+    }
+
+    .header h1 {
+      margin: 0;
+    }
+
+    .header-buttons {
+      display: flex;
+      gap: 15px;
+    }
+
+    button {
+      padding: 12px 25px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #00d9ff;
+      border-radius: 4px;
+      color: #00d9ff;
+      font-size: 16px;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    button:hover {
+      background: rgba(0, 217, 255, 0.2);
+      box-shadow: 0 0 15px rgba(0, 217, 255, 0.6);
+      transform: scale(1.05);
+    }
+
+    #back-btn {
+      border-color: #00ff00;
+      color: #00ff00;
+    }
+
+    #back-btn:hover {
+      background: rgba(0, 255, 0, 0.2);
+      box-shadow: 0 0 15px rgba(0, 255, 0, 0.6);
+    }
+
+    #logout-btn {
+      border-color: #ff4444;
+      color: #ff4444;
+    }
+
+    #logout-btn:hover {
+      background: rgba(255, 68, 68, 0.2);
+      box-shadow: 0 0 15px rgba(255, 68, 68, 0.6);
+    }
+
+    /* Connection Status */
+    #connection-status {
+      font-size: 1.2em;
+      padding: 15px 25px;
+      border-radius: 6px;
+      text-align: center;
+      margin-bottom: 30px;
+      font-weight: bold;
+      border: 2px solid;
+    }
+
+    .status-connected {
+      background: rgba(0, 255, 0, 0.1);
+      color: #00ff00;
+      border-color: #00ff00;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+    }
+
+    .status-disconnected {
+      background: rgba(255, 68, 68, 0.1);
+      color: #ff4444;
+      border-color: #ff4444;
+      box-shadow: 0 0 20px rgba(255, 68, 68, 0.3);
+      animation: blink 1s infinite;
+    }
+
+    .status-connecting {
+      background: rgba(255, 255, 0, 0.1);
+      color: #ffff00;
+      border-color: #ffff00;
+      box-shadow: 0 0 20px rgba(255, 255, 0, 0.3);
+    }
+
+    @keyframes blink {
+      50% { opacity: 0.5; }
+    }
+
+    /* Stats Panel */
+    .stats-panel {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .stat-card {
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #00d9ff;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 0 20px rgba(0, 217, 255, 0.2);
+    }
+
+    .stat-card .value {
+      font-size: 2.5em;
+      font-weight: bold;
+      color: #00d9ff;
+      text-shadow: 0 0 10px rgba(0, 217, 255, 0.8);
+    }
+
+    .stat-card .label {
+      font-size: 1em;
+      color: #00ff00;
+      margin-top: 10px;
+    }
+
+    /* Event Log */
+    #event-log {
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #00ff00;
+      padding: 20px;
+      border-radius: 8px;
+      min-height: 400px;
+      max-height: 600px;
+      overflow-y: auto;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+    }
+
+    .attack-event {
+      background: rgba(0, 0, 0, 0.5);
+      border-left: 4px solid #ff4444;
+      padding: 15px 20px;
+      margin-bottom: 15px;
+      border-radius: 4px;
+      font-size: 1.1em;
+      line-height: 1.6;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .attack-event:hover {
+      transform: translateX(5px);
+      box-shadow: 0 2px 10px rgba(255, 68, 68, 0.3);
+    }
+
+    .attack-event strong {
+      color: #00d9ff;
+    }
+
+    .attack-event .country {
+      color: #ff8c00;
+    }
+
+    .attack-event .ip {
+      color: #00ffaa;
+    }
+
+    .attack-event .timestamp {
+      color: #888;
+      font-size: 0.9em;
+    }
+
+    .attack-event .threat-type {
+      color: #ff4444;
+      font-weight: bold;
+    }
+
+    /* Scrollbar styling */
+    #event-log::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    #event-log::-webkit-scrollbar-track {
+      background: #000000;
+    }
+
+    #event-log::-webkit-scrollbar-thumb {
+      background: #00ff00;
+      border-radius: 5px;
+    }
+
+    #event-log::-webkit-scrollbar-thumb:hover {
+      background: #00d9ff;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+
+    /* Settings Section */
+    .settings-section {
+      margin-bottom: 30px;
+    }
+
+    .settings-panel {
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #00d9ff;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 0 20px rgba(0, 217, 255, 0.2);
+    }
+
+    .settings-panel h3 {
+      color: #00d9ff;
+      margin-bottom: 20px;
+      font-size: 1.2em;
+      text-shadow: 0 0 10px rgba(0, 217, 255, 0.5);
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      color: #00ff00;
+      font-size: 0.9em;
+    }
+
+    .form-group input {
+      width: 100%;
+      max-width: 300px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid #00d9ff;
+      border-radius: 4px;
+      color: #00ff00;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: #00ff00;
+      box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+    }
+
+    .form-actions {
+      margin-top: 20px;
+    }
+
+    .btn-primary {
+      padding: 10px 20px;
+      background: rgba(0, 217, 255, 0.2);
+      border: 2px solid #00d9ff;
+      color: #00d9ff;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      border-radius: 4px;
+    }
+
+    .btn-primary:hover {
+      background: rgba(0, 217, 255, 0.4);
+      box-shadow: 0 0 15px rgba(0, 217, 255, 0.6);
+    }
+
+    .btn-danger {
+      padding: 10px 20px;
+      background: rgba(255, 68, 68, 0.2);
+      border: 2px solid #ff4444;
+      color: #ff4444;
+      font-family: 'Courier New', monospace;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      border-radius: 4px;
+    }
+
+    .btn-danger:hover {
+      background: rgba(255, 68, 68, 0.4);
+      box-shadow: 0 0 15px rgba(255, 68, 68, 0.6);
+    }
+
+    /* Logo preview */
+    .logo-preview-container {
+      margin-bottom: 20px;
+    }
+
+    .logo-preview {
+      margin-top: 10px;
+      padding: 15px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid #00d9ff;
+      border-radius: 4px;
+      display: inline-block;
+      max-width: 100%;
+    }
+
+    .logo-preview img {
+      max-height: 150px;
+      max-width: 300px;
+      display: block;
+    }
+
+    .logo-status {
+      margin-top: 10px;
+      font-size: 0.9em;
+      color: #888;
+    }
+
+    .logo-status.custom {
+      color: #00ff00;
+    }
+
+    .logo-status.default {
+      color: #00d9ff;
+    }
+
+    /* File input styling */
+    input[type="file"] {
+      width: 100%;
+      max-width: 400px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid #00d9ff;
+      border-radius: 4px;
+      color: #00ff00;
+      font-family: 'Courier New', monospace;
+      cursor: pointer;
+    }
+
+    input[type="file"]::-webkit-file-upload-button {
+      background: rgba(0, 217, 255, 0.2);
+      border: 1px solid #00d9ff;
+      color: #00d9ff;
+      padding: 5px 15px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: 'Courier New', monospace;
+      margin-right: 10px;
+    }
+
+    input[type="file"]::-webkit-file-upload-button:hover {
+      background: rgba(0, 217, 255, 0.4);
+    }
+
+    .message {
+      margin-top: 15px;
+      padding: 10px;
+      border-radius: 4px;
+      display: none;
+    }
+
+    .message.success {
+      display: block;
+      background: rgba(0, 255, 0, 0.1);
+      border: 1px solid #00ff00;
+      color: #00ff00;
+    }
+
+    .message.error {
+      display: block;
+      background: rgba(255, 68, 68, 0.1);
+      border: 1px solid #ff4444;
+      color: #ff4444;
+    }
+
+    /* Collapsible sections */
+    .section-toggle {
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 20px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #00d9ff;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      transition: all 0.3s ease;
+    }
+
+    .section-toggle:hover {
+      background: rgba(0, 217, 255, 0.1);
+    }
+
+    .section-toggle h2 {
+      margin: 0;
+      font-size: 1.3em;
+    }
+
+    .section-toggle .toggle-icon {
+      font-size: 1.5em;
+      transition: transform 0.3s ease;
+    }
+
+    .section-toggle.expanded .toggle-icon {
+      transform: rotate(180deg);
+    }
+
+    .section-content {
+      display: none;
+      padding: 0;
+    }
+
+    .section-content.expanded {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>ADMIN PANEL</h1>
+      <div class="header-buttons">
+        <button id="back-btn" onclick="window.location.href='/dashboard'">Back to Globe</button>
+        <button id="logout-btn" onclick="logout()">Logout</button>
+      </div>
+    </div>
+
+    <div id="connection-status" class="status-connecting">CONNECTING...</div>
+
+    <!-- Settings Section -->
+    <div class="settings-section">
+      <div class="section-toggle" onclick="toggleSection('password-section')">
+        <h2>ACCOUNT SETTINGS</h2>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div id="password-section" class="section-content">
+        <div class="settings-panel">
+          <h3>Dashboard Heading</h3>
+          <form id="heading-form">
+            <div class="form-group">
+              <label for="dashboard-heading">Heading Text</label>
+              <input type="text" id="dashboard-heading" name="heading" required maxlength="50" placeholder="OCDE Threat Map">
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary">Update Heading</button>
+            </div>
+            <div id="heading-message" class="message"></div>
+          </form>
+        </div>
+
+        <div class="settings-panel" style="margin-top: 20px;">
+          <h3>Custom Logo</h3>
+          <div class="logo-preview-container">
+            <label>Current Logo:</label>
+            <div id="logo-preview" class="logo-preview">
+              <img id="current-logo-img" src="" alt="Current Logo">
+            </div>
+            <div id="logo-status" class="logo-status"></div>
+          </div>
+          <form id="logo-form" enctype="multipart/form-data">
+            <div class="form-group">
+              <label for="logo-file">Upload New Logo (PNG, JPEG, GIF, SVG, WebP - Max 5MB)</label>
+              <input type="file" id="logo-file" name="logo" accept="image/png,image/jpeg,image/gif,image/svg+xml,image/webp">
+            </div>
+            <div class="form-actions" style="display: flex; gap: 10px;">
+              <button type="submit" class="btn-primary">Upload Logo</button>
+              <button type="button" id="remove-logo-btn" class="btn-danger" style="display: none;">Remove Custom Logo</button>
+            </div>
+            <div id="logo-message" class="message"></div>
+          </form>
+        </div>
+
+        <div class="settings-panel" style="margin-top: 20px;">
+          <h3>Change Password</h3>
+          <form id="change-password-form">
+            <div class="form-group">
+              <label for="current-password">Current Password</label>
+              <input type="password" id="current-password" name="currentPassword" required autocomplete="current-password">
+            </div>
+            <div class="form-group">
+              <label for="new-password">New Password (min 8 chars, uppercase, lowercase, number)</label>
+              <input type="password" id="new-password" name="newPassword" required autocomplete="new-password" minlength="8" pattern="(?=.*\d)(?=.*[a-z])(?=.*[A-Z]).{8,}">
+            </div>
+            <div class="form-group">
+              <label for="confirm-password">Confirm New Password</label>
+              <input type="password" id="confirm-password" name="confirmPassword" required autocomplete="new-password">
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary">Change Password</button>
+            </div>
+            <div id="password-message" class="message"></div>
+          </form>
+        </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats Panel -->
+    <div class="stats-panel">
+      <div class="stat-card">
+        <div class="value" id="total-attacks">0</div>
+        <div class="label">TOTAL ATTACKS</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="attacks-per-minute">0</div>
+        <div class="label">ATTACKS/MIN</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="unique-countries">0</div>
+        <div class="label">COUNTRIES</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="ocde-targeted">0</div>
+        <div class="label">OCDE TARGETED</div>
+      </div>
+    </div>
+
+    <h2>REAL-TIME ATTACK LOG</h2>
+    <div id="event-log">
+      <div class="empty-state">Waiting for attack data...</div>
+    </div>
+  </div>
+
+  <script>
+    // Stats tracking
+    let totalAttacks = 0;
+    let ocdeTargeted = 0;
+    const countriesSet = new Set();
+    const attackTimes = [];
+    const maxLogEntries = 100;
+
+    // Calculate attacks per minute
+    function calculateAPM() {
+      const now = Date.now();
+      const oneMinuteAgo = now - 60000;
+      // Filter to only attacks in the last minute
+      while (attackTimes.length > 0 && attackTimes[0] < oneMinuteAgo) {
+        attackTimes.shift();
+      }
+      return attackTimes.length;
+    }
+
+    // Update stats display
+    function updateStats() {
+      document.getElementById('total-attacks').textContent = totalAttacks;
+      document.getElementById('attacks-per-minute').textContent = calculateAPM();
+      document.getElementById('unique-countries').textContent = countriesSet.size;
+      document.getElementById('ocde-targeted').textContent = ocdeTargeted;
+    }
+
+    // Add attack event to log
+    function addAttackEvent(data) {
+      const eventLog = document.getElementById('event-log');
+
+      // Remove empty state if present
+      const emptyState = eventLog.querySelector('.empty-state');
+      if (emptyState) {
+        emptyState.remove();
+      }
+
+      // Update stats
+      totalAttacks++;
+      attackTimes.push(Date.now());
+
+      if (data.geo && data.geo.country) {
+        countriesSet.add(data.geo.country);
+      }
+
+      if (data.isOCDETarget) {
+        ocdeTargeted++;
+      }
+
+      updateStats();
+
+      // Create event element
+      const eventEl = document.createElement('div');
+      eventEl.className = 'attack-event';
+
+      const timestamp = new Date().toLocaleTimeString();
+      const country = data.geo?.countryName || data.geo?.country || 'Unknown';
+      const city = data.geo?.city || '';
+      const sourceIP = data.sourceIP || data.attack?.source_ip || 'Unknown';
+      const destIP = data.destinationIP || data.attack?.dest_ip || 'Unknown';
+      const threatType = data.threatType || data.attack?.threat_type || 'deny';
+      const isOCDE = data.isOCDETarget ? ' [OCDE TARGET]' : '';
+
+      eventEl.innerHTML = `
+        <span class="timestamp">[${timestamp}]</span>
+        <span class="threat-type">${threatType.toUpperCase()}</span>${isOCDE}
+        <br>
+        <span class="country">${country}${city ? ', ' + city : ''}</span>
+        <span class="ip">${sourceIP}</span> → <span class="ip">${destIP}</span>
+      `;
+
+      // Insert at top
+      eventLog.insertBefore(eventEl, eventLog.firstChild);
+
+      // Limit entries
+      while (eventLog.children.length > maxLogEntries) {
+        eventLog.removeChild(eventLog.lastChild);
+      }
+    }
+
+    // WebSocket connection
+    let ws;
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = function() {
+        console.log('WebSocket connected');
+        const statusEl = document.getElementById('connection-status');
+        statusEl.textContent = 'CONNECTED';
+        statusEl.className = 'status-connected';
+      };
+
+      ws.onclose = function() {
+        console.log('WebSocket disconnected');
+        const statusEl = document.getElementById('connection-status');
+        statusEl.textContent = 'DISCONNECTED - Reconnecting...';
+        statusEl.className = 'status-disconnected';
+
+        // Reconnect after 3 seconds
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+      };
+
+      ws.onmessage = function(event) {
+        try {
+          const data = JSON.parse(event.data);
+
+          // Handle different message types
+          if (data.type === 'attack' || data.attack) {
+            addAttackEvent(data);
+          } else if (data.type === 'heartbeat') {
+            // Ignore heartbeat
+          } else {
+            // Treat as attack data
+            addAttackEvent(data);
+          }
+        } catch (e) {
+          console.error('Failed to parse message:', e);
+        }
+      };
+    }
+
+    // Logout function
+    function logout() {
+      fetch('/logout', { method: 'POST' })
+        .then(() => {
+          window.location.href = '/';
+        })
+        .catch(err => {
+          console.error('Logout failed:', err);
+          window.location.href = '/';
+        });
+    }
+
+    // Update APM every second
+    setInterval(updateStats, 1000);
+
+    // Connect on page load
+    connectWebSocket();
+
+    // Load current settings
+    loadSettings();
+
+    async function loadSettings() {
+      try {
+        const response = await fetch('/api/settings');
+        const data = await response.json();
+
+        if (data.success && data.settings) {
+          // Populate heading field
+          document.getElementById('dashboard-heading').value = data.settings.heading || '';
+        }
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+      }
+    }
+
+    // Load current logo
+    loadLogo();
+
+    async function loadLogo() {
+      try {
+        const response = await fetch('/api/logo');
+        const data = await response.json();
+
+        if (data.success) {
+          const logoImg = document.getElementById('current-logo-img');
+          const logoStatus = document.getElementById('logo-status');
+          const removeBtn = document.getElementById('remove-logo-btn');
+
+          logoImg.src = data.logoUrl + '?t=' + Date.now(); // Cache bust
+
+          if (data.isCustom) {
+            logoStatus.textContent = 'Using custom logo';
+            logoStatus.className = 'logo-status custom';
+            removeBtn.style.display = 'inline-block';
+          } else {
+            logoStatus.textContent = 'Using default OCDE logo';
+            logoStatus.className = 'logo-status default';
+            removeBtn.style.display = 'none';
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load logo:', err);
+      }
+    }
+
+    // Handle logo upload
+    document.getElementById('logo-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const fileInput = document.getElementById('logo-file');
+      const messageEl = document.getElementById('logo-message');
+
+      // Reset message
+      messageEl.className = 'message';
+      messageEl.style.display = 'none';
+
+      if (!fileInput.files || !fileInput.files[0]) {
+        messageEl.textContent = 'Please select a file to upload';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('logo', fileInput.files[0]);
+
+      try {
+        const response = await fetch('/api/logo', {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          messageEl.textContent = data.message || 'Logo uploaded successfully!';
+          messageEl.className = 'message success';
+          fileInput.value = ''; // Clear file input
+          loadLogo(); // Refresh preview
+        } else {
+          messageEl.textContent = data.error || 'Failed to upload logo';
+          messageEl.className = 'message error';
+        }
+      } catch (err) {
+        console.error('Logo upload error:', err);
+        messageEl.textContent = 'Connection error - please try again';
+        messageEl.className = 'message error';
+      }
+    });
+
+    // Handle logo removal
+    document.getElementById('remove-logo-btn').addEventListener('click', async () => {
+      const messageEl = document.getElementById('logo-message');
+
+      if (!confirm('Are you sure you want to remove the custom logo and revert to the default?')) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/logo', {
+          method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          messageEl.textContent = data.message || 'Custom logo removed!';
+          messageEl.className = 'message success';
+          loadLogo(); // Refresh preview
+        } else {
+          messageEl.textContent = data.error || 'Failed to remove logo';
+          messageEl.className = 'message error';
+        }
+      } catch (err) {
+        console.error('Logo removal error:', err);
+        messageEl.textContent = 'Connection error - please try again';
+        messageEl.className = 'message error';
+      }
+    });
+
+    // Handle heading change form
+    document.getElementById('heading-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const heading = document.getElementById('dashboard-heading').value.trim();
+      const messageEl = document.getElementById('heading-message');
+
+      // Reset message
+      messageEl.className = 'message';
+      messageEl.style.display = 'none';
+
+      if (!heading) {
+        messageEl.textContent = 'Heading cannot be empty';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ heading })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          messageEl.textContent = 'Heading updated successfully!';
+          messageEl.className = 'message success';
+        } else {
+          messageEl.textContent = data.error || 'Failed to update heading';
+          messageEl.className = 'message error';
+        }
+      } catch (err) {
+        console.error('Heading update error:', err);
+        messageEl.textContent = 'Connection error - please try again';
+        messageEl.className = 'message error';
+      }
+    });
+
+    // Toggle collapsible sections
+    function toggleSection(sectionId) {
+      const section = document.getElementById(sectionId);
+      const toggle = section.previousElementSibling;
+
+      section.classList.toggle('expanded');
+      toggle.classList.toggle('expanded');
+    }
+
+    // Handle password change form
+    document.getElementById('change-password-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const currentPassword = document.getElementById('current-password').value;
+      const newPassword = document.getElementById('new-password').value;
+      const confirmPassword = document.getElementById('confirm-password').value;
+      const messageEl = document.getElementById('password-message');
+
+      // Reset message
+      messageEl.className = 'message';
+      messageEl.style.display = 'none';
+
+      // Validate passwords match
+      if (newPassword !== confirmPassword) {
+        messageEl.textContent = 'New passwords do not match';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      // Validate password strength
+      if (newPassword.length < 8) {
+        messageEl.textContent = 'Password must be at least 8 characters';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      const hasLower = /[a-z]/.test(newPassword);
+      const hasUpper = /[A-Z]/.test(newPassword);
+      const hasNumber = /[0-9]/.test(newPassword);
+
+      if (!hasLower || !hasUpper || !hasNumber) {
+        messageEl.textContent = 'Password must contain lowercase, uppercase, and numbers';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/change-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ currentPassword, newPassword })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          messageEl.textContent = data.message || 'Password changed successfully!';
+          messageEl.className = 'message success';
+
+          // Clear form
+          document.getElementById('change-password-form').reset();
+        } else {
+          messageEl.textContent = data.error || 'Failed to change password';
+          messageEl.className = 'message error';
+        }
+      } catch (err) {
+        console.error('Password change error:', err);
+        messageEl.textContent = 'Connection error - please try again';
+        messageEl.className = 'message error';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -12,22 +12,19 @@ const { WebSocket } = require('ws');
  * @returns {boolean} - True if broadcast succeeded, false if skipped
  */
 function broadcastAttack(wss, event) {
-  // Check if event has geo data from enrichment
-  // GeoLocator returns `country` field with ISO code
-  if (!event.geo || !event.geo.country) {
-    console.log('[Attack Broadcaster] Skipping event without geo data');
-    return false;
-  }
-
-  // Prepare broadcast message
-  // Add country_code alias for dashboard compatibility
+  // Prepare broadcast message with geo data if available
+  // Broadcast ALL events, even without geo data (graceful degradation)
   const message = {
     type: 'enriched',
     timestamp: event.timestamp || new Date().toISOString(),
-    geo: {
+    geo: event.geo ? {
       ...event.geo,
       country_code: event.geo.country  // Dashboard expects country_code
-    },
+    } : null,  // null if no geo data available
+    sourceIP: event.sourceIP,  // Add top-level sourceIP for display
+    destinationIP: event.destinationIP,
+    isOCDETarget: event.isOCDETarget,
+    threatType: event.threatType,
     attack: {
       source_ip: event.sourceIP,
       destination_ip: event.destinationIP,
@@ -57,7 +54,8 @@ function broadcastAttack(wss, event) {
     }
   }
 
-  console.log(`[Attack Broadcaster] Broadcast attack from ${event.geo.country} to ${successCount} clients`);
+  const source = event.geo ? event.geo.country : event.sourceIP;
+  console.log(`[Attack Broadcaster] Broadcast attack from ${source} to ${successCount} clients`);
 
   if (failureCount > 0) {
     console.warn(`[Attack Broadcaster] ${failureCount} clients failed to receive message`);

@@ -11,6 +11,8 @@ const http = require('http');
 const path = require('path');
 const express = require('express');
 const bodyParser = require('body-parser');
+const helmet = require('helmet');
+const { loginLimiter, apiLimiter, passwordChangeLimiter } = require('./middleware/rate-limiter');
 const { SyslogReceiver } = require('./receivers/udp-receiver');
 const eventBus = require('./events/event-bus');
 const { PaloAltoParser } = require('./parsers/palo-alto-parser');
@@ -20,6 +22,9 @@ const { sessionParser } = require('./middleware/session');
 const { requireAuth } = require('./middleware/auth-check');
 const loginRouter = require('./routes/login');
 const logoutRouter = require('./routes/logout');
+const changePasswordRouter = require('./routes/change-password');
+const settingsRouter = require('./routes/settings');
+const logoRouter = require('./routes/logo');
 const { setupWebSocketServer } = require('./websocket/ws-server');
 const { wireEventBroadcast } = require('./websocket/broadcaster');
 
@@ -37,8 +42,28 @@ const app = express();
 const server = http.createServer(app);
 
 // Configure Express middleware
+// Security headers with helmet
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "unpkg.com", "cdn.jsdelivr.net"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:", "unpkg.com", "raw.githubusercontent.com"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false  // Required for external resources
+}));
+
 app.use(bodyParser.json());
 app.use(sessionParser);
+
+// Apply general API rate limiting
+app.use('/api', apiLimiter);
 
 // Serve static files from public directory
 app.use(express.static('public'));
@@ -49,13 +74,21 @@ app.get('/reconnecting-websocket', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'node_modules', 'reconnecting-websocket', 'dist', 'reconnecting-websocket-iife.min.js'));
 });
 
-// Mount routes
-app.use('/login', loginRouter);
+// Mount routes with rate limiting
+app.use('/login', loginLimiter, loginRouter);
 app.use('/logout', logoutRouter);
+app.use('/api/change-password', passwordChangeLimiter, requireAuth, changePasswordRouter);
+app.use('/api/settings', settingsRouter);  // GET is public, PUT requires auth below
+app.use('/api/logo', logoRouter);  // Logo upload/management
 
 // Protected dashboard route
 app.get('/dashboard', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html'));
+});
+
+// Protected admin panel route
+app.get('/admin', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
 });
 
 // Root redirect to dashboard

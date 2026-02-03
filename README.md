@@ -2,7 +2,8 @@
 
 A real-time 3D visualization system that displays firewall threat data on an interactive globe. Designed for Network Operations Center (NOC) wall displays, the system ingests Palo Alto firewall DENY logs via UDP syslog, performs IP geolocation, and renders animated arcs from attack origins to your network location.
 <img width="3826" height="1891" alt="image" src="https://github.com/user-attachments/assets/4ab2b536-bb9c-43d0-812e-24779b385765" />
-<img width="3826" height="1891" alt="image" src="https://github.com/user-attachments/assets/4ab2b536-bb9c-43d0-812e-24779b385765" />
+<img width="3815" height="1897" alt="image" src="https://github.com/user-attachments/assets/02716ab2-c81a-43b6-b9a0-de09003f2914" />
+<img width="2133" height="1841" alt="image" src="https://github.com/user-attachments/assets/a0b54c28-b4dc-4577-af63-9745e0a561a6" />
 
 ## Features
 

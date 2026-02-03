@@ -1,133 +1,214 @@
-# OCDE Cyber Threat Map - Syslog Receiver
+# OCDE Cyber Threat Map
 
-## Overview
-Real-time visual threat map for OCDE network. This repository contains the syslog ingestion and parsing system for Palo Alto firewall DENY logs.
+A real-time 3D visualization system that displays firewall threat data on an interactive globe. Designed for Network Operations Center (NOC) wall displays, the system ingests Palo Alto firewall DENY logs via UDP syslog, performs IP geolocation, and renders animated arcs from attack origins to your network location.
 
-## Requirements
-- Node.js 22.x LTS or higher
-- Root privileges for port 514 binding (or use setcap)
-- Palo Alto firewall configured for RFC 5424 syslog format
+## Features
 
-## Installation
+- **Real-time Visualization** - Animated arcs show attacks as they happen on a 3D WebGL globe
+- **IP Geolocation** - MaxMind GeoLite2 database maps source IPs to geographic coordinates
+- **Threat Classification** - Color-coded arcs by threat type (malware, intrusion, DDoS, deny)
+- **NOC-Optimized Display** - Dark theme with high-contrast colors, readable from 20+ feet
+- **Live Statistics** - Top attacking countries, threat types, and attacks per minute
+- **Secure Authentication** - Session-based login with bcrypt password hashing
+- **Admin Panel** - Change passwords, customize headings, upload logo
+- **Alternative Views** - Toggle between 3D globe and 2D flat map
+
+## Prerequisites
+
+- **Node.js 22.x** or higher
+- **MaxMind GeoLite2-City database** (free, requires account)
+- **Palo Alto firewall** configured to send syslog over UDP
+- Root privileges for port 514 (or use alternative port)
+
+## Quick Start
+
+### 1. Clone and Install
+
 ```bash
+git clone https://github.com/OCDEkr/OCDEThreatMap.git
+cd OCDEThreatMap
 npm install
 ```
 
-## Configuration
+### 2. Download MaxMind Database
 
-### Palo Alto Firewall Setup
-Configure firewall to send syslog to this server:
-1. Navigate to Device > Server Profiles > Syslog
-2. Add server with receiver IP address, port 514, UDP transport
-3. Set format to IETF (RFC 5424) — NOT BSD
-4. In Log Settings, configure THREAT logs to forward to syslog server
-5. Verify "Send Hostname in Syslog" setting matches expected format (recommend: disabled for consistent parsing)
+1. Create a free account at [MaxMind](https://www.maxmind.com/en/geolite2/signup)
+2. Download **GeoLite2-City.mmdb**
+3. Place it in the `data/` directory:
+   ```bash
+   mkdir -p data
+   mv ~/Downloads/GeoLite2-City.mmdb data/
+   ```
 
-**Critical:** Use RFC 5424 format to ensure consistent parsing across firmware versions (see .planning/phases/01-foundation-and-architecture/01-RESEARCH.md Pitfall 2).
+### 3. Configure Environment
 
-### Port 514 Privileges
-Port 514 requires root privileges on Linux. Options:
-
-**Option 1 - Run with sudo using full path:**
 ```bash
-sudo $(which node) src/app.js
+cp .env.example .env
 ```
 
-**Option 2 - Grant Node.js capability (recommended for production):**
+Edit `.env` with your settings:
+
+```env
+# Required for production
+SESSION_SECRET=your-64-character-random-string
+DASHBOARD_PASSWORD=YourSecurePassword123!
+
+# Optional
+DASHBOARD_USERNAME=admin
+SYSLOG_PORT=514
+NODE_ENV=development
+```
+
+Generate a secure session secret:
 ```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+### 4. Start the Server
+
+**Development mode** (port 5514, no root required):
+```bash
+SYSLOG_PORT=5514 npm run dev
+```
+
+**Production mode** (port 514, requires root):
+```bash
+# Option 1: Run with sudo
+sudo $(which node) src/app.js
+
+# Option 2: Grant capability (recommended)
 sudo setcap cap_net_bind_service=+ep $(which node)
-node src/app.js
+npm start
 ```
 
-**Option 3 - Use alternative port (requires firewall reconfiguration):**
-```bash
-SYSLOG_PORT=10514 node src/app.js
-```
-Then reconfigure Palo Alto firewall to send syslog to port 10514.
+### 5. Access the Dashboard
 
-## Running
+1. Open http://localhost:3000
+2. Login with your configured credentials
+3. The dashboard will display attacks in real-time
 
-**Start receiver:**
-```bash
-sudo $(which node) src/app.js
+## Palo Alto Firewall Configuration
+
+Configure your firewall to send threat logs to the server:
+
+1. **Device > Server Profiles > Syslog**
+   - Add server with your receiver's IP address
+   - Port: 514 (or your configured port)
+   - Transport: UDP
+   - Format: **IETF (RFC 5424)** - NOT BSD
+
+2. **Objects > Log Forwarding**
+   - Create a profile that forwards THREAT logs to your syslog server
+
+3. **Policies > Security**
+   - Apply the log forwarding profile to your security rules
+
+## Architecture
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ Palo Alto    │ ──▶ │ UDP Receiver │ ──▶ │   Parser     │ ──▶ │  Enrichment  │
+│ Firewall     │     │ (Port 514)   │     │ (RFC 5424)   │     │  (MaxMind)   │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+                                                                      │
+                                                                      ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  3D Globe    │ ◀── │  Dashboard   │ ◀── │  WebSocket   │ ◀── │  Event Bus   │
+│  (Globe.GL)  │     │  (Browser)   │     │  Broadcast   │     │  (enriched)  │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
-**Development mode with alternative port (no sudo needed):**
-```bash
-SYSLOG_PORT=5514 node src/app.js
+## Project Structure
+
 ```
+OCDEThreatMap/
+├── src/
+│   ├── app.js                 # Application entry point
+│   ├── receivers/             # UDP syslog listener
+│   ├── parsers/               # RFC 5424 / Palo Alto parser
+│   ├── enrichment/            # MaxMind geolocation + caching
+│   ├── websocket/             # Real-time broadcast to clients
+│   ├── middleware/            # Session, auth, rate limiting
+│   ├── routes/                # Login, logout, admin APIs
+│   └── utils/                 # Security utilities
+├── public/
+│   ├── dashboard.html         # Main visualization page
+│   ├── admin.html             # Admin panel
+│   ├── css/                   # NOC-optimized dark theme
+│   └── js/                    # Globe.GL, D3, WebSocket client
+├── data/
+│   └── GeoLite2-City.mmdb     # MaxMind database (download separately)
+└── test/                      # Parser tests
+```
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SESSION_SECRET` | Yes (prod) | fallback | 32+ character secret for session signing |
+| `DASHBOARD_USERNAME` | No | `admin` | Login username |
+| `DASHBOARD_PASSWORD` | Yes (prod) | `change-me` | Login password |
+| `SYSLOG_PORT` | No | `514` | UDP port for syslog receiver |
+| `NODE_ENV` | No | `development` | Set to `production` for secure cookies |
+
+## Security Features
+
+- **bcrypt** password hashing (12 rounds)
+- **Rate limiting** on login (5 attempts/15 min) and API routes
+- **Helmet.js** security headers
+- **httpOnly, sameSite strict** cookies
+- **Constant-time** password comparison (timing attack prevention)
+- **Security event logging** for auditing
 
 ## Testing
 
-**Automated test suite:**
+Send a test syslog message:
+
+```bash
+# Start server on alternative port
+SYSLOG_PORT=5514 node src/app.js &
+
+# Send test message
+echo '<14>1 2024-01-26T10:00:00Z PA-VM - - - [meta src=203.0.113.50 dst=10.0.0.1 action=deny threat_type=malware]' | nc -u localhost 5514
+```
+
+Run parser tests:
 ```bash
 node test/test-parser.js
 ```
 
-**Manual test (send sample log):**
-```bash
-# Using alternative port (no sudo needed)
-SYSLOG_PORT=5514 node src/app.js &
-echo '<14>1 2024-01-26T10:00:00Z PA-VM - - - [pan@0 src=192.168.1.100 dst=10.0.0.50 action=deny threat_type=malware] Test' | nc -u localhost 5514
-```
+## Admin Panel
 
-## Monitoring
+Access the admin panel at `/admin` (requires authentication):
 
-**Console output:**
-- PARSED events: Successfully parsed DENY logs with extracted fields (JSON format)
-- METRICS: Every 10 seconds shows received count, parsed count, failed count, success rate %
-- Parse errors: Logged but don't crash application (graceful degradation)
-
-**Success rate requirement:** Parse success rate should exceed 95% with real firewall logs.
-Current test fixture rate: ~80% (includes malformed samples and edge cases for testing).
-
-**Dead letter queue:** Failed messages logged to `logs/failed-messages.jsonl`
+- **Change Password** - Update admin password with complexity requirements
+- **Customize Heading** - Change the dashboard title
+- **Upload Logo** - Replace the default logo with your organization's branding
 
 ## Troubleshooting
 
-**"sudo: node: command not found":**
-- Use full path: `sudo $(which node) src/app.js`
-- Or use alternative port: `SYSLOG_PORT=5514 node src/app.js` (no sudo needed)
+**Port 514 permission denied:**
+```bash
+# Grant Node.js capability to bind privileged ports
+sudo setcap cap_net_bind_service=+ep $(which node)
+```
 
-**Parse success rate below 95%:**
-- Verify firewall using RFC 5424 format (not BSD)
-- Check "Send Hostname in Syslog" setting on firewall
-- Review logs/failed-messages.jsonl for patterns in failures
-- Request actual firewall log samples to test against
+**No attacks appearing:**
+- Verify firewall is sending to correct IP/port
+- Check syslog format is RFC 5424 (IETF), not BSD
+- Ensure DENY/threat logs are being forwarded
+- Check browser console for WebSocket connection errors
 
-**No messages received:**
-- Verify firewall syslog server configuration points to this server's IP
-- Check network connectivity: `nc -u -l 514` and send test from firewall
-- Verify firewall THREAT log forwarding enabled
+**WebSocket authentication failed:**
+- Clear browser cookies and re-login
+- Verify SESSION_SECRET matches between restarts
 
-## Architecture
+## License
 
-**Event-driven flow:**
-1. UDP receiver (src/receivers/udp-receiver.js) listens on port 514
-2. Raw messages emitted to event bus as 'message' events
-3. Parser (src/parsers/palo-alto-parser.js) consumes 'message' events
-4. Parsed events emitted as 'parsed' events with extracted fields
-5. Failed parses emitted as 'parse-error' events and logged to DLQ
+ISC
 
-**Key components:**
-- src/receivers/udp-receiver.js: UDP socket server with 32MB receive buffer
-- src/parsers/palo-alto-parser.js: RFC 5424 parser with Palo Alto field extraction
-- src/events/event-bus.js: Central EventEmitter for message flow
-- src/utils/error-handler.js: Dead letter queue for failed messages
-- src/app.js: Application entry point, wiring, metrics
+## Acknowledgments
 
-## Phase 1 Status
-✓ UDP syslog receiver operational
-✓ RFC 5424 parser with field extraction
-✓ Event-driven architecture (sub-5 second latency)
-✓ Graceful error handling and dead letter queue
-✓ Parse success rate measurement
-✓ Automated test suite (80% success rate on fixtures)
-
-**Next phase:** IP geolocation enrichment (Phase 2)
-
-## Research and Planning
-See `.planning/` directory for:
-- 01-RESEARCH.md: Technical research, pitfalls, code examples
-- 01-XX-PLAN.md: Execution plans for each implementation step
-- 01-XX-SUMMARY.md: Completion summaries with decisions and learnings
+- [Globe.GL](https://globe.gl/) - 3D globe visualization
+- [MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) - IP geolocation
+- [Three.js](https://threejs.org/) - WebGL rendering engine

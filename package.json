@@ -3,12 +3,29 @@
   "version": "1.0.0",
   "description": "Real-time threat visualization system for OCDE firewall logs",
   "main": "src/app.js",
+  "bin": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
-    "dev": "node --watch src/app.js"
+    "dev": "node --watch src/app.js",
+    "build": "node scripts/build.js",
+    "build:linux": "pkg . --targets node18-linux-x64 --output dist/ocde-threat-map-linux",
+    "build:macos": "pkg . --targets node18-macos-x64 --output dist/ocde-threat-map-macos",
+    "build:windows": "pkg . --targets node18-win-x64 --output dist/ocde-threat-map-win.exe",
+    "build:all": "pkg . --targets node18-linux-x64,node18-macos-x64,node18-win-x64 --out-path dist"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "node_modules/three/**/*",
+      "node_modules/globe.gl/**/*"
+    ],
+    "outputPath": "dist"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

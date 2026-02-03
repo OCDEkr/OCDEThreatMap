@@ -177,6 +177,73 @@ Run parser tests:
 node test/test-parser.js
 ```
 
+## Building Standalone Executables
+
+Create self-contained binaries that run without Node.js installed.
+
+### Build All Platforms
+
+```bash
+npm run build
+```
+
+This creates executables for Linux, macOS, and Windows in the `dist/` directory.
+
+### Build Single Platform
+
+```bash
+npm run build:linux    # Linux x64
+npm run build:macos    # macOS x64
+npm run build:windows  # Windows x64
+```
+
+### Distribution Structure
+
+After building, each platform folder contains:
+
+```
+dist/
+├── linux/
+│   ├── ocde-threat-map-linux    # Executable
+│   ├── public/                   # Web assets (required)
+│   ├── data/                     # Place GeoLite2-City.mmdb here
+│   ├── .env.example              # Configuration template
+│   ├── start.sh                  # Launch script
+│   └── QUICKSTART.md             # Quick reference
+├── macos/
+│   └── ...
+└── windows/
+    ├── ocde-threat-map-win.exe
+    ├── start.bat
+    └── ...
+```
+
+### Deploying a Build
+
+1. Copy the entire platform folder to target machine
+2. Download MaxMind GeoLite2-City.mmdb into the `data/` folder
+3. Copy `.env.example` to `.env` and configure
+4. Run the executable or use the start script
+
+**Linux/macOS:**
+```bash
+chmod +x ocde-threat-map-linux start.sh
+./start.sh
+# Or directly: ./ocde-threat-map-linux
+```
+
+**Windows:**
+```cmd
+start.bat
+REM Or directly: ocde-threat-map-win.exe
+```
+
+### Build Requirements
+
+- Node.js 22.x (for building only - not needed to run)
+- npm packages installed (`npm install`)
+- ~500MB disk space for all platforms
+
 ## Admin Panel
 
 Access the admin panel at `/admin` (requires authentication):

@@ -70,18 +70,21 @@
     fetch('https://raw.githubusercontent.com/vasturiano/globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson')
       .then(res => res.json())
       .then(countries => {
+        // Mark country features for identification
+        const countryFeatures = countries.features.map(f => ({ ...f, isCountry: true }));
+
         globeInstance
-          .polygonsData(countries.features)
+          .polygonsData(countryFeatures)
           .polygonAltitude(0.01)
-          .polygonCapColor(() => 'rgba(0, 100, 200, 0.05)')  // Very transparent country fill
-          .polygonSideColor(() => 'rgba(0, 255, 255, 0.15)')  // Subtle cyan border glow
-          .polygonStrokeColor(() => '#00ffff')  // Bright cyan borders
+          .polygonCapColor(() => 'rgba(0, 50, 100, 0.02)')  // Nearly transparent fill
+          .polygonSideColor(() => 'rgba(255, 255, 255, 0.1)')  // Subtle white side glow
+          .polygonStrokeColor(() => '#ffffff')  // White borders for countries
           .polygonLabel(({ properties: d }) => `
-            <div style="background: rgba(0, 0, 0, 0.9); padding: 3px 6px; border: 1px solid #00ffff; border-radius: 3px;">
+            <div style="background: rgba(0, 0, 0, 0.9); padding: 3px 6px; border: 1px solid #ffffff; border-radius: 3px;">
               <b>${d.ADMIN || d.NAME || ''}</b>
             </div>
           `);
-        console.log('Country borders loaded successfully');
+        console.log('Country borders loaded successfully:', countryFeatures.length, 'countries');
 
         // Load US state borders after countries are loaded
         loadUSStateBorders();
@@ -202,23 +205,25 @@
         // Extract existing country data first to avoid overwriting
         const existingPolygons = globeInstance.polygonsData();
 
-        // Add state features with distinct styling
+        // Add state features with distinct styling (white lines for states too)
+        const stateFeatures = states.features.map(f => ({ ...f, isState: true }));
+
         globeInstance
-          .polygonsData([...existingPolygons, ...states.features.map(f => ({ ...f, isState: true }))])
+          .polygonsData([...existingPolygons, ...stateFeatures])
           .polygonAltitude(d => d.isState ? 0.012 : 0.01)
-          .polygonCapColor(d => d.isState ? 'rgba(255, 165, 0, 0.03)' : 'rgba(0, 100, 200, 0.05)')
-          .polygonSideColor(d => d.isState ? 'rgba(255, 165, 0, 0.2)' : 'rgba(0, 255, 255, 0.15)')
-          .polygonStrokeColor(d => d.isState ? '#ffa500' : '#00ffff')
+          .polygonCapColor(d => d.isState ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 50, 100, 0.02)')
+          .polygonSideColor(d => d.isState ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.1)')
+          .polygonStrokeColor(() => '#ffffff')  // White borders for all (countries and states)
           .polygonLabel(({ properties: d, isState }) => {
             if (isState) {
               return `
-                <div style="background: rgba(0, 0, 0, 0.9); padding: 3px 6px; border: 1px solid #ffa500; border-radius: 3px;">
+                <div style="background: rgba(0, 0, 0, 0.9); padding: 3px 6px; border: 1px solid #ffffff; border-radius: 3px;">
                   <b>${d.name || ''}</b>
                 </div>
               `;
             }
             return `
-              <div style="background: rgba(0, 0, 0, 0.9); padding: 3px 6px; border: 1px solid #00ffff; border-radius: 3px;">
+              <div style="background: rgba(0, 0, 0, 0.9); padding: 3px 6px; border: 1px solid #ffffff; border-radius: 3px;">
                 <b>${d.ADMIN || d.NAME || ''}</b>
               </div>
             `;

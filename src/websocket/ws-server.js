@@ -24,9 +24,13 @@ function setupWebSocketServer(httpServer, sessionParser) {
 
   // Handle HTTP upgrade to WebSocket
   httpServer.on('upgrade', (request, socket, head) => {
+    console.log('[WS] Upgrade request received from:', request.headers.origin || 'unknown');
+    console.log('[WS] Cookies present:', !!request.headers.cookie);
+
     // Authenticate using session
     authenticateUpgrade(request, socket, sessionParser)
       .then((session) => {
+        console.log('[WS] Authentication successful for:', session.userId);
         // Authentication successful - complete upgrade
         wss.handleUpgrade(request, socket, head, (ws) => {
           // Attach session info to WebSocket
@@ -37,7 +41,8 @@ function setupWebSocketServer(httpServer, sessionParser) {
       })
       .catch((err) => {
         // Authentication failed - reject connection
-        console.log('WebSocket authentication failed:', err.message);
+        console.log('[WS] Authentication failed:', err.message);
+        console.log('[WS] Session data:', request.session ? JSON.stringify(request.session) : 'no session');
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
       });

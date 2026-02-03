@@ -24,7 +24,7 @@ const sessionParser = session({
   cookie: {
     httpOnly: true,           // Prevent XSS attacks - JS cannot access cookie
     secure: isProduction,     // Only send over HTTPS in production
-    sameSite: 'strict',       // Prevent CSRF attacks
+    sameSite: 'lax',          // Lax allows WebSocket upgrades while preventing most CSRF
     maxAge: 24 * 60 * 60 * 1000  // 24 hours
   }
 });

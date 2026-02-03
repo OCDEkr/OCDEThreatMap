@@ -20,7 +20,7 @@ A real-time 3D visualization system that displays firewall threat data on an int
 
 - **Node.js 22.x** or higher
 - **MaxMind GeoLite2-City database** (free, requires account)
-- **Palo Alto firewall** configured to send syslog over UDP
+- **Firewall** configured to send syslog over UDP
 - Root privileges for port 514 (or use alternative port)
 
 ## Quick Start

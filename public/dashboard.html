@@ -74,10 +74,29 @@
   </button>
 
   <!-- Admin Panel Button (next to rotate toggle) -->
-  <button id="admin-panel-btn" class="admin-panel-btn" onclick="window.location.href='/admin'">
+  <button id="admin-panel-btn" class="admin-panel-btn" onclick="goToAdmin()">
     <span id="admin-icon">⚙️</span>
-    <span id="admin-label">Admin Panel</span>
+    <span id="admin-label">Admin</span>
   </button>
+
+  <script>
+    // Check auth status and navigate to admin or login
+    function goToAdmin() {
+      fetch('/api/auth/status')
+        .then(res => res.json())
+        .then(data => {
+          if (data.authenticated) {
+            window.location.href = '/admin';
+          } else {
+            window.location.href = '/login';
+          }
+        })
+        .catch(() => {
+          // On error, try admin (will redirect to login if needed)
+          window.location.href = '/admin';
+        });
+    }
+  </script>
 
   <!-- Event Log (bottom overlay) -->
   <div id="event-log">

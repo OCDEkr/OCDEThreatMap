@@ -10,7 +10,11 @@ const { requireAuth } = require('../middleware/auth-check');
 // In-memory settings storage (persists until server restart)
 const settings = {
   heading: 'OCDE Threat Map',
-  // Add more settings here as needed
+  // Network binding settings (require restart to take effect)
+  httpBindAddress: '127.0.0.1',      // Default to localhost for security
+  syslogBindAddress: '127.0.0.1',    // Default to localhost for security
+  httpPort: 3000,
+  syslogPort: 514,
 };
 
 /**

@@ -82,9 +82,26 @@ app.use('/api/change-password', passwordChangeLimiter, requireAuth, changePasswo
 app.use('/api/settings', settingsRouter);  // GET is public, PUT requires auth below
 app.use('/api/logo', logoRouter);  // Logo upload/management
 
-// Protected dashboard route
-app.get('/dashboard', requireAuth, (req, res) => {
+// Public dashboard route (no authentication required)
+app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html'));
+});
+
+// Auth status check endpoint (for client-side auth state detection)
+app.get('/api/auth/status', (req, res) => {
+  res.json({
+    authenticated: !!(req.session && req.session.authenticated),
+    userId: req.session?.userId || null
+  });
+});
+
+// Admin login page (public - allows unauthenticated users to log in)
+app.get('/login', (req, res) => {
+  // If already authenticated, redirect to admin
+  if (req.session && req.session.authenticated === true) {
+    return res.redirect('/admin');
+  }
+  res.sendFile(path.join(__dirname, '..', 'public', 'login.html'));
 });
 
 // Protected admin panel route
@@ -97,12 +114,17 @@ app.get('/', (req, res) => {
   res.redirect('/dashboard');
 });
 
+// Get settings for network binding
+const { getSettings } = require('./routes/settings');
+const networkSettings = getSettings();
+
 // Create syslog receiver instance
-// Use environment variable for port, defaulting to 514
-const port = parseInt(process.env.SYSLOG_PORT || '514', 10);
+// Environment variables override settings, settings default to localhost (127.0.0.1)
+const syslogPort = parseInt(process.env.SYSLOG_PORT || networkSettings.syslogPort || '514', 10);
+const syslogBindAddress = process.env.SYSLOG_BIND_ADDRESS || networkSettings.syslogBindAddress || '127.0.0.1';
 const receiver = new SyslogReceiver({
-  port: port,
-  address: '0.0.0.0'
+  port: syslogPort,
+  address: syslogBindAddress
 });
 
 // Create parser, dead letter queue, and enrichment pipeline
@@ -174,8 +196,11 @@ async function start() {
     console.log('');
 
     // Start HTTP server
-    server.listen(3000, () => {
-      console.log('HTTP server listening on port 3000');
+    // Environment variables override settings, settings default to localhost (127.0.0.1)
+    const httpPort = parseInt(process.env.HTTP_PORT || networkSettings.httpPort || '3000', 10);
+    const httpBindAddress = process.env.HTTP_BIND_ADDRESS || networkSettings.httpBindAddress || '127.0.0.1';
+    server.listen(httpPort, httpBindAddress, () => {
+      console.log(`HTTP server listening on ${httpBindAddress}:${httpPort}`);
     });
 
     // Setup WebSocket server

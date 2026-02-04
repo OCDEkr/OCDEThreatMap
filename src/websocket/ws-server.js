@@ -1,6 +1,7 @@
 /**
  * WebSocket Server
- * Handles WebSocket connections with session authentication and heartbeat
+ * Handles WebSocket connections with optional authentication and heartbeat
+ * Dashboard connections are public; admin panel requires authentication
  */
 
 const { WebSocketServer, WebSocket } = require('ws');
@@ -11,7 +12,7 @@ const { broadcastAttack } = require('./attack-broadcaster');
 let wss;
 
 /**
- * Sets up WebSocket server with authentication and heartbeat
+ * Sets up WebSocket server with optional authentication and heartbeat
  * @param {http.Server} httpServer - HTTP server instance
  * @param {Function} sessionParser - express-session middleware
  */
@@ -27,24 +28,23 @@ function setupWebSocketServer(httpServer, sessionParser) {
     console.log('[WS] Upgrade request received from:', request.headers.origin || 'unknown');
     console.log('[WS] Cookies present:', !!request.headers.cookie);
 
-    // Authenticate using session
+    // Authenticate using session (allows anonymous access)
     authenticateUpgrade(request, socket, sessionParser)
       .then((session) => {
-        console.log('[WS] Authentication successful for:', session.userId);
-        // Authentication successful - complete upgrade
+        // session is null for anonymous users, or contains user data for authenticated users
+        const userId = session ? session.userId : 'anonymous-' + Date.now();
+        const isAuthenticated = !!session;
+
+        console.log('[WS] Connection accepted for:', userId, isAuthenticated ? '(authenticated)' : '(anonymous)');
+
+        // Complete WebSocket upgrade
         wss.handleUpgrade(request, socket, head, (ws) => {
           // Attach session info to WebSocket
-          ws.userId = session.userId;
+          ws.userId = userId;
+          ws.isAuthenticated = isAuthenticated;
           // Emit connection event
           wss.emit('connection', ws, request);
         });
-      })
-      .catch((err) => {
-        // Authentication failed - reject connection
-        console.log('[WS] Authentication failed:', err.message);
-        console.log('[WS] Session data:', request.session ? JSON.stringify(request.session) : 'no session');
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
       });
   });
 

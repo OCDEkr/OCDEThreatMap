@@ -288,6 +288,30 @@
       box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
     }
 
+    .form-group select {
+      width: 100%;
+      max-width: 400px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid #00d9ff;
+      border-radius: 4px;
+      color: #00ff00;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .form-group select:focus {
+      outline: none;
+      border-color: #00ff00;
+      box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+    }
+
+    .form-group select option {
+      background: #000;
+      color: #00ff00;
+    }
+
     .form-actions {
       margin-top: 20px;
     }
@@ -532,6 +556,68 @@
       </div>
     </div>
 
+    <!-- Network Settings Section -->
+    <div class="settings-section">
+      <div class="section-toggle" onclick="toggleSection('network-section')">
+        <h2>NETWORK SETTINGS</h2>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div id="network-section" class="section-content">
+        <div class="settings-panel">
+          <div class="warning-box" style="background: rgba(255, 140, 0, 0.1); border: 1px solid #ff8c00; color: #ff8c00; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+            <strong>NOTE:</strong> Network binding changes require a server restart to take effect.
+          </div>
+
+          <h3>HTTP Server Binding</h3>
+          <form id="http-binding-form">
+            <div class="form-group">
+              <label for="http-bind-address">Bind Address</label>
+              <select id="http-bind-address" name="httpBindAddress">
+                <option value="127.0.0.1">127.0.0.1 (Localhost only - Recommended)</option>
+                <option value="0.0.0.0">0.0.0.0 (All interfaces - External access)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="http-port">HTTP Port</label>
+              <input type="number" id="http-port" name="httpPort" min="1" max="65535" value="3000">
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary">Update HTTP Binding</button>
+            </div>
+            <div id="http-binding-message" class="message"></div>
+          </form>
+        </div>
+
+        <div class="settings-panel" style="margin-top: 20px;">
+          <h3>Syslog Receiver Binding</h3>
+          <form id="syslog-binding-form">
+            <div class="form-group">
+              <label for="syslog-bind-address">Bind Address</label>
+              <select id="syslog-bind-address" name="syslogBindAddress">
+                <option value="127.0.0.1">127.0.0.1 (Localhost only - Recommended)</option>
+                <option value="0.0.0.0">0.0.0.0 (All interfaces - External access)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="syslog-port">Syslog Port (UDP)</label>
+              <input type="number" id="syslog-port" name="syslogPort" min="1" max="65535" value="514">
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary">Update Syslog Binding</button>
+            </div>
+            <div id="syslog-binding-message" class="message"></div>
+          </form>
+        </div>
+
+        <div class="settings-panel" style="margin-top: 20px;">
+          <h3>Current Binding Status</h3>
+          <div id="binding-status" style="font-family: 'Courier New', monospace; background: rgba(0, 0, 0, 0.5); padding: 15px; border-radius: 4px;">
+            Loading...
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Stats Panel -->
     <div class="stats-panel">
       <div class="stat-card">
@@ -716,9 +802,41 @@
         if (data.success && data.settings) {
           // Populate heading field
           document.getElementById('dashboard-heading').value = data.settings.heading || '';
+
+          // Populate network settings
+          document.getElementById('http-bind-address').value = data.settings.httpBindAddress || '127.0.0.1';
+          document.getElementById('http-port').value = data.settings.httpPort || 3000;
+          document.getElementById('syslog-bind-address').value = data.settings.syslogBindAddress || '127.0.0.1';
+          document.getElementById('syslog-port').value = data.settings.syslogPort || 514;
+
+          // Update binding status display
+          updateBindingStatus(data.settings);
         }
       } catch (err) {
         console.error('Failed to load settings:', err);
+      }
+    }
+
+    function updateBindingStatus(settings) {
+      const statusEl = document.getElementById('binding-status');
+      if (statusEl) {
+        const httpAddr = settings.httpBindAddress || '127.0.0.1';
+        const httpPort = settings.httpPort || 3000;
+        const syslogAddr = settings.syslogBindAddress || '127.0.0.1';
+        const syslogPort = settings.syslogPort || 514;
+
+        statusEl.innerHTML = `
+          <div style="margin-bottom: 10px;">
+            <span style="color: #00d9ff;">HTTP Server:</span>
+            <span style="color: ${httpAddr === '0.0.0.0' ? '#ff8c00' : '#00ff00'};">${httpAddr}:${httpPort}</span>
+            ${httpAddr === '0.0.0.0' ? '<span style="color: #ff8c00;"> (External)</span>' : '<span style="color: #00ff00;"> (Local only)</span>'}
+          </div>
+          <div>
+            <span style="color: #00d9ff;">Syslog Receiver:</span>
+            <span style="color: ${syslogAddr === '0.0.0.0' ? '#ff8c00' : '#00ff00'};">${syslogAddr}:${syslogPort}</span>
+            ${syslogAddr === '0.0.0.0' ? '<span style="color: #ff8c00;"> (External)</span>' : '<span style="color: #00ff00;"> (Local only)</span>'}
+          </div>
+        `;
       }
     }
 
@@ -937,6 +1055,96 @@
         }
       } catch (err) {
         console.error('Password change error:', err);
+        messageEl.textContent = 'Connection error - please try again';
+        messageEl.className = 'message error';
+      }
+    });
+
+    // Handle HTTP binding form
+    document.getElementById('http-binding-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const httpBindAddress = document.getElementById('http-bind-address').value;
+      const httpPort = parseInt(document.getElementById('http-port').value, 10);
+      const messageEl = document.getElementById('http-binding-message');
+
+      // Reset message
+      messageEl.className = 'message';
+      messageEl.style.display = 'none';
+
+      // Validate port
+      if (httpPort < 1 || httpPort > 65535) {
+        messageEl.textContent = 'Port must be between 1 and 65535';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ httpBindAddress, httpPort })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          messageEl.textContent = 'HTTP binding updated. Restart server to apply changes.';
+          messageEl.className = 'message success';
+          updateBindingStatus(data.settings);
+        } else {
+          messageEl.textContent = data.error || 'Failed to update HTTP binding';
+          messageEl.className = 'message error';
+        }
+      } catch (err) {
+        console.error('HTTP binding update error:', err);
+        messageEl.textContent = 'Connection error - please try again';
+        messageEl.className = 'message error';
+      }
+    });
+
+    // Handle Syslog binding form
+    document.getElementById('syslog-binding-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const syslogBindAddress = document.getElementById('syslog-bind-address').value;
+      const syslogPort = parseInt(document.getElementById('syslog-port').value, 10);
+      const messageEl = document.getElementById('syslog-binding-message');
+
+      // Reset message
+      messageEl.className = 'message';
+      messageEl.style.display = 'none';
+
+      // Validate port
+      if (syslogPort < 1 || syslogPort > 65535) {
+        messageEl.textContent = 'Port must be between 1 and 65535';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ syslogBindAddress, syslogPort })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          messageEl.textContent = 'Syslog binding updated. Restart server to apply changes.';
+          messageEl.className = 'message success';
+          updateBindingStatus(data.settings);
+        } else {
+          messageEl.textContent = data.error || 'Failed to update syslog binding';
+          messageEl.className = 'message error';
+        }
+      } catch (err) {
+        console.error('Syslog binding update error:', err);
         messageEl.textContent = 'Connection error - please try again';
         messageEl.className = 'message error';
       }

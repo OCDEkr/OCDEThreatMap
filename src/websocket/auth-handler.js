@@ -1,16 +1,39 @@
 /**
  * WebSocket Authentication Handler
- * Validates session during WebSocket upgrade
+ * Validates session during WebSocket upgrade (optional - allows public access)
  */
 
 /**
  * Authenticates WebSocket upgrade request using session
+ * Returns session if authenticated, or null for anonymous access
+ * @param {http.IncomingMessage} request - HTTP upgrade request
+ * @param {net.Socket} socket - TCP socket
+ * @param {Function} sessionParser - express-session middleware
+ * @returns {Promise<Object|null>} Resolves with session if authenticated, null for anonymous
+ */
+function authenticateUpgrade(request, socket, sessionParser) {
+  return new Promise((resolve) => {
+    // Parse session from cookies
+    sessionParser(request, {}, () => {
+      // Check if session exists and user is authenticated
+      if (request.session && request.session.authenticated === true) {
+        resolve(request.session);
+      } else {
+        // Allow anonymous access - return null instead of rejecting
+        resolve(null);
+      }
+    });
+  });
+}
+
+/**
+ * Requires authentication for WebSocket upgrade (for admin-only connections)
  * @param {http.IncomingMessage} request - HTTP upgrade request
  * @param {net.Socket} socket - TCP socket
  * @param {Function} sessionParser - express-session middleware
  * @returns {Promise<Object>} Resolves with session if authenticated, rejects if not
  */
-function authenticateUpgrade(request, socket, sessionParser) {
+function requireAuthUpgrade(request, socket, sessionParser) {
   return new Promise((resolve, reject) => {
     // Parse session from cookies
     sessionParser(request, {}, () => {
@@ -24,4 +47,4 @@ function authenticateUpgrade(request, socket, sessionParser) {
   });
 }
 
-module.exports = { authenticateUpgrade };
+module.exports = { authenticateUpgrade, requireAuthUpgrade };

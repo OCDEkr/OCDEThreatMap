@@ -22,14 +22,72 @@
   const COUNTRY_FLASH_DURATION = 500;  // Duration of country flash animation in ms
   const COUNTRY_FLASH_DELAY = 300;  // Delay before arc starts after flash begins
 
-  // Threat-type color mapping (matching arcs.js)
-  const THREAT_COLORS = {
-    malware: 0xff0000,        // Red
-    intrusion: 0xff8c00,      // Dark orange
-    ddos: 0x8a2be2,           // Purple
-    deny: 0xffa500,           // Orange
-    default: 0xffa500         // Orange fallback
+  // Country/region-based color mapping for visual distinction
+  // Colors chosen for NOC visibility and regional grouping
+  const COUNTRY_COLORS = {
+    // Asia - Warm colors
+    CN: 0xff0000,    // China - Red
+    RU: 0xff3300,    // Russia - Red-Orange
+    KP: 0xcc0000,    // North Korea - Dark Red
+    IR: 0xff6600,    // Iran - Orange
+    IN: 0xff9900,    // India - Gold
+    PK: 0xffcc00,    // Pakistan - Yellow-Gold
+    VN: 0xff6666,    // Vietnam - Light Red
+    KR: 0xff9966,    // South Korea - Peach
+    JP: 0xffcccc,    // Japan - Pink
+    ID: 0xff8800,    // Indonesia - Dark Orange
+    TH: 0xffaa00,    // Thailand - Amber
+    MY: 0xffbb33,    // Malaysia - Gold-Orange
+    PH: 0xffcc66,    // Philippines - Light Gold
+    BD: 0xff7744,    // Bangladesh - Coral
+
+    // Europe - Cool colors
+    DE: 0x00ccff,    // Germany - Cyan
+    FR: 0x0099ff,    // France - Blue
+    NL: 0x0066ff,    // Netherlands - Royal Blue
+    GB: 0x3399ff,    // UK - Sky Blue
+    UA: 0x00ffff,    // Ukraine - Aqua
+    PL: 0x66ccff,    // Poland - Light Blue
+    RO: 0x3366ff,    // Romania - Medium Blue
+    IT: 0x00cc99,    // Italy - Teal
+    ES: 0x00ff99,    // Spain - Mint
+
+    // Americas - Greens and Purples
+    US: 0x00ff00,    // USA - Green (if attacking)
+    BR: 0x00cc00,    // Brazil - Dark Green
+    MX: 0x66ff66,    // Mexico - Light Green
+    AR: 0x33cc33,    // Argentina - Medium Green
+    CO: 0x99ff99,    // Colombia - Pale Green
+    CA: 0x00ff66,    // Canada - Spring Green
+
+    // Africa/Middle East - Purples and Magentas
+    NG: 0x9900ff,    // Nigeria - Purple
+    ZA: 0xcc00ff,    // South Africa - Magenta
+    EG: 0xff00ff,    // Egypt - Fuchsia
+    KE: 0xcc66ff,    // Kenya - Lavender
+    MA: 0xff66cc,    // Morocco - Pink-Purple
+    SA: 0xff0099,    // Saudi Arabia - Hot Pink
+    AE: 0xff33cc,    // UAE - Rose
+    IL: 0xcc00cc,    // Israel - Dark Magenta
+
+    // Oceania
+    AU: 0xffff00,    // Australia - Yellow
+    NZ: 0xccff00,    // New Zealand - Lime
+
+    // Default for unknown countries
+    default: 0xffa500  // Orange fallback
   };
+
+  /**
+   * Get color for a country code
+   * @param {string} countryCode - ISO 2-letter country code
+   * @returns {number} Color as hex value
+   */
+  function getCountryColor(countryCode) {
+    if (!countryCode) return COUNTRY_COLORS.default;
+    const code = countryCode.toUpperCase();
+    return COUNTRY_COLORS[code] || COUNTRY_COLORS.default;
+  }
 
   /**
    * Convert lat/lng coordinates to 3D Cartesian coordinates
@@ -188,9 +246,9 @@
     // Create arc geometry
     const geometry = createArcGeometry(curve);
 
-    // Determine color based on threat type
-    const threatType = arcData.threatType || 'default';
-    const color = THREAT_COLORS[threatType] || THREAT_COLORS.default;
+    // Determine color based on country code (not threat type - PA logs don't report useful threat data)
+    const countryCode = arcData.countryCode || 'default';
+    const color = getCountryColor(countryCode);
 
     // Create arc material with high visibility (MeshBasicMaterial for TubeGeometry)
     const material = new THREE.MeshBasicMaterial({
@@ -237,7 +295,6 @@
       duration: ARC_ANIMATION_DURATION,
       color: color,
       metadata: {
-        threatType: threatType,
         sourceIP: arcData.sourceIP,
         countryCode: arcData.countryCode
       }
@@ -252,7 +309,7 @@
     }
 
     console.log('[Custom Arc Added]', arcData.countryCode || 'Unknown', '->', 'OCDE',
-                `[${threatType}]`, `Start: (${arcData.startLat.toFixed(2)}, ${arcData.startLng.toFixed(2)})`,
+                `Start: (${arcData.startLat.toFixed(2)}, ${arcData.startLng.toFixed(2)})`,
                 `End: (${arcData.endLat.toFixed(2)}, ${arcData.endLng.toFixed(2)})`,
                 `(${animatingArcs.length} active)`);
   };

@@ -66,15 +66,13 @@
             const dstLat = 33.7490;  // OCDE latitude
             const dstLng = -117.8705; // OCDE longitude
 
-            // Map threat type to colors
-            const threatType = data.attack?.threat_type || data.threatType || 'default';
-            const colorMap = {
-              malware: ['rgba(255, 0, 0, 0.8)', 'rgba(255, 100, 0, 0.8)'],
-              intrusion: ['rgba(255, 140, 0, 0.8)', 'rgba(255, 165, 0, 0.8)'],
-              ddos: ['rgba(138, 43, 226, 0.8)', 'rgba(153, 50, 204, 0.8)'],
-              default: ['rgba(255, 165, 0, 0.8)', 'rgba(255, 140, 0, 0.8)']
-            };
-            const color = colorMap[threatType] || colorMap.default;
+            // Get country code for color mapping
+            const countryCode = data.geo?.country || 'XX';
+
+            // Get country color (shared function)
+            const color = window.getCountryColorRgba ?
+              window.getCountryColorRgba(countryCode) :
+              ['rgba(255, 165, 0, 0.8)', 'rgba(255, 140, 0, 0.8)'];
 
             window.addD3Arc(srcLat, srcLng, dstLat, dstLng, color);
           }

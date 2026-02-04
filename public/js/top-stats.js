@@ -102,9 +102,18 @@
    * @param {Object} data - Enriched attack data
    */
   window.updateTopStats = function(data) {
-    // Update country statistics - use full country name
-    const countryName = data.geo?.countryName || data.geo?.country || 'Unknown';
-    countryStats.set(countryName, (countryStats.get(countryName) || 0) + 1);
+    // Update country statistics - store both name and code
+    const countryCode = data.geo?.country_code || data.geo?.country || 'XX';
+    const countryName = data.geo?.countryName || countryCode;
+
+    // Use country code as key to track both name and count
+    const existing = countryStats.get(countryCode) || { name: countryName, count: 0 };
+    existing.count++;
+    // Update name if we get a better one (actual name vs code)
+    if (countryName.length > 2) {
+      existing.name = countryName;
+    }
+    countryStats.set(countryCode, existing);
 
     // Update attack type statistics
     const threatType = data.attack?.threat_type || data.threatType || 'unknown';
@@ -123,8 +132,9 @@
     if (!listElement) return;
 
     // Sort countries by count (descending) and take top 10
+    // countryStats now stores { name, count } objects keyed by country code
     const sortedCountries = Array.from(countryStats.entries())
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 10);
 
     if (sortedCountries.length === 0) {
@@ -132,21 +142,29 @@
       return;
     }
 
-    // Build the list HTML
-    const html = sortedCountries.map(([country, count], index) => {
-      const barWidth = Math.max(5, (count / sortedCountries[0][1]) * 100);
+    const topCount = sortedCountries[0][1].count;
 
-      // Alternate text color: cyan (#00ffff) for odd entries (1st, 3rd, 5th...), white for even
-      const textColor = (index % 2 === 0) ? '#00ffff' : '#ffffff';
+    // Build the list HTML with country-specific colors matching arc colors
+    const html = sortedCountries.map(([countryCode, data], index) => {
+      const barWidth = Math.max(5, (data.count / topCount) * 100);
+
+      // Get the country's arc color (falls back to orange if not mapped)
+      const textColor = window.getCountryColorHex ? window.getCountryColorHex(countryCode) : '#ffa500';
+
+      // Convert hex to rgba for bar background
+      const r = parseInt(textColor.slice(1, 3), 16);
+      const g = parseInt(textColor.slice(3, 5), 16);
+      const b = parseInt(textColor.slice(5, 7), 16);
+      const barBg = `rgba(${r}, ${g}, ${b}, 0.2)`;
 
       return `
         <div style="margin: 4px 0;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: bold; color: ${textColor};">${index + 1}. ${country}</span>
-            <span style="color: #ffa500;">${count}</span>
+            <span style="font-weight: bold; color: ${textColor}; text-shadow: 0 0 8px ${textColor};">${index + 1}. ${data.name}</span>
+            <span style="color: ${textColor};">${data.count}</span>
           </div>
-          <div style="background: rgba(255, 140, 0, 0.2); height: 4px; margin-top: 2px;">
-            <div style="background: #ff8c00; height: 100%; width: ${barWidth}%;"></div>
+          <div style="background: ${barBg}; height: 4px; margin-top: 2px;">
+            <div style="background: ${textColor}; height: 100%; width: ${barWidth}%;"></div>
           </div>
         </div>
       `;

@@ -40,62 +40,76 @@
       try {
         const data = JSON.parse(event.data);
 
+        // Handle batched events (new high-performance mode)
+        if (data.type === 'batch' && Array.isArray(data.events)) {
+          data.events.forEach(evt => processEvent(evt));
+          return;
+        }
+
+        // Handle single enriched event (legacy/fallback)
         if (data.type === 'enriched') {
-          // Apply OCDE filter if active
-          if (ocdeFilterActive && !data.isOCDETarget) {
-            // Skip non-OCDE attacks when filter is on
-            console.log('[Filter] Skipped non-OCDE attack from', data.sourceIP);
-            return;
-          }
-
-          // Create arc on globe
-          if (window.addAttackArc) {
-            window.addAttackArc(data);
-          }
-
-          // Create arc on flat map (always add to both - only visible one will render)
-          if (window.addFlatMapArc) {
-            window.addFlatMapArc(data);
-          }
-
-          // Create arc on D3 flat map (D3.js version)
-          if (window.addD3Arc) {
-            // Extract coordinates from geolocation data
-            const srcLat = data.geo?.latitude || 0;
-            const srcLng = data.geo?.longitude || 0;
-            const dstLat = 33.7490;  // OCDE latitude
-            const dstLng = -117.8705; // OCDE longitude
-
-            // Get country code for color mapping
-            const countryCode = data.geo?.country || 'XX';
-
-            // Get country color (shared function)
-            const color = window.getCountryColorRgba ?
-              window.getCountryColorRgba(countryCode) :
-              ['rgba(255, 165, 0, 0.8)', 'rgba(255, 140, 0, 0.8)'];
-
-            window.addD3Arc(srcLat, srcLng, dstLat, dstLng, color);
-          }
-
-          // Update statistics
-          if (window.updateMetrics) {
-            window.updateMetrics(data);
-          }
-
-          // Update top statistics (countries and attacks)
-          if (window.updateTopStats) {
-            window.updateTopStats(data);
-          }
-
-          // Add to event log
-          addEventToLog(data);
-
-          eventCount++;
+          processEvent(data);
         }
       } catch (err) {
         console.error('Error handling message:', err);
       }
     });
+
+    /**
+     * Process a single enriched event
+     * @param {Object} data - Enriched event data
+     */
+    function processEvent(data) {
+      // Apply OCDE filter if active
+      if (ocdeFilterActive && !data.isOCDETarget) {
+        return;
+      }
+
+      // Create arc on globe
+      if (window.addAttackArc) {
+        window.addAttackArc(data);
+      }
+
+      // Create arc on flat map (always add to both - only visible one will render)
+      if (window.addFlatMapArc) {
+        window.addFlatMapArc(data);
+      }
+
+      // Create arc on D3 flat map (D3.js version)
+      if (window.addD3Arc) {
+        // Extract coordinates from geolocation data
+        const srcLat = data.geo?.latitude || 0;
+        const srcLng = data.geo?.longitude || 0;
+        const dstLat = 33.7490;  // OCDE latitude
+        const dstLng = -117.8705; // OCDE longitude
+
+        // Get country code for color mapping
+        const countryCode = data.geo?.country || 'XX';
+
+        // Get country color (shared function)
+        const color = window.getCountryColorRgba ?
+          window.getCountryColorRgba(countryCode) :
+          ['rgba(255, 165, 0, 0.8)', 'rgba(255, 140, 0, 0.8)'];
+
+        window.addD3Arc(srcLat, srcLng, dstLat, dstLng, color);
+      }
+
+      // Update statistics
+      if (window.updateMetrics) {
+        window.updateMetrics(data);
+      }
+
+      // Update top statistics (countries and attacks)
+      if (window.updateTopStats) {
+        window.updateTopStats(data);
+      }
+
+      // Add to event log (only add every 10th event to reduce DOM updates)
+      eventCount++;
+      if (eventCount % 10 === 0 || eventCount < 50) {
+        addEventToLog(data);
+      }
+    }
 
     ws.addEventListener('close', () => {
       console.log('Dashboard WebSocket disconnected');
@@ -141,23 +155,18 @@
 
     // Format event message
     const timestamp = new Date(data.timestamp).toLocaleTimeString();
-    const country = data.geo?.country_code || 'Unknown';
+    const countryCode = data.geo?.country_code || data.geo?.country || 'XX';
+    const countryName = data.geo?.countryName || countryCode;
     const city = data.geo?.city || 'Unknown';
     const port = data.attack?.destination_port || '?';
     const service = data.attack?.service || 'unknown';
-    const threatType = data.attack?.threat_type || data.threatType || 'default';
 
-    // Map threat type to colors (matching arc colors)
-    const colorMap = {
-      malware: '#ff0000',      // Red
-      intrusion: '#ff8c00',    // Orange
-      ddos: '#8a2be2',         // Purple
-      default: '#ff8c00'       // Orange (default)
-    };
-    const textColor = colorMap[threatType] || colorMap.default;
+    // Get country color matching arc color
+    const countryColor = window.getCountryColorHex ? window.getCountryColorHex(countryCode) : '#ffa500';
 
-    eventDiv.textContent = `[${timestamp}] Attack from ${country} (${city}) → Port ${port} (${service})`;
-    eventDiv.style.color = textColor;
+    // Build HTML with colored country name
+    eventDiv.innerHTML = `[${timestamp}] Attack from <span style="color: ${countryColor}; font-weight: bold; text-shadow: 0 0 5px ${countryColor};">${countryName}</span> (${city}) → Port ${port} (${service})`;
+    eventDiv.style.color = '#888';  // Base color for non-country text
 
     // Add to top of log
     container.insertBefore(eventDiv, container.firstChild);

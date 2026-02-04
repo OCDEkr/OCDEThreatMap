@@ -285,27 +285,28 @@ body {
   max-width: 40vw;  /* Never more than 40% of viewport width */
   max-height: 25vh;  /* Never more than 25% of viewport height */
   background: rgba(0, 0, 0, 0.9);
-  border: 2px solid #0f0;
+  border: 2px solid #00d9ff;
   padding: 10px;
   z-index: 10;
   overflow-y: auto;
   backdrop-filter: blur(5px);
-  font-size: 22px;
+  font-size: 16px;
+  box-shadow: 0 0 15px rgba(0, 217, 255, 0.3);
 }
 
 #event-header {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: bold;
   margin-bottom: 8px;
-  border-bottom: 1px solid #0f0;
+  border-bottom: 1px solid #00d9ff;
   padding-bottom: 3px;
-  color: #0f0;
-  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+  color: #00d9ff;
+  text-shadow: 0 0 10px rgba(0, 217, 255, 0.8);
 }
 
 #events-container {
-  font-size: 20px;
-  line-height: 1.1;
+  font-size: 16px;
+  line-height: 1.2;
   max-height: calc(25vh - 60px);  /* Account for header and padding */
   overflow-y: auto;
 }
@@ -321,14 +322,14 @@ body {
 
 .event-item.new {
   animation: pulse 0.5s;
-  background: rgba(255, 165, 0, 0.2);
-  border-left: 3px solid #ffa500;
+  background: rgba(0, 217, 255, 0.15);
+  border-left: 3px solid #00d9ff;
 }
 
 @keyframes pulse {
   0% {
     opacity: 1;
-    background: rgba(255, 165, 0, 0.3);
+    background: rgba(0, 217, 255, 0.25);
     transform: translateX(0);
   }
   50% {
@@ -347,16 +348,16 @@ body {
 }
 
 #events-container::-webkit-scrollbar-track {
-  background: rgba(0, 255, 0, 0.1);
+  background: rgba(0, 217, 255, 0.1);
 }
 
 #events-container::-webkit-scrollbar-thumb {
-  background: rgba(0, 255, 0, 0.3);
+  background: rgba(0, 217, 255, 0.3);
   border-radius: 4px;
 }
 
 #events-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 255, 0, 0.5);
+  background: rgba(0, 217, 255, 0.5);
 }
 
 /* Large screen optimizations (HD) */
@@ -365,13 +366,13 @@ body {
     font-size: 28px;
     padding: 15px 25px;
   }
-  #event-header { font-size: 32px; }
+  #event-header { font-size: 26px; }
   #events-container {
-    font-size: 24px;
+    font-size: 18px;
   }
   #event-log {
     width: 450px;  /* Slightly larger on HD screens */
-    font-size: 26px;
+    font-size: 18px;
   }
 }
 
@@ -381,14 +382,14 @@ body {
     font-size: 36px;
     padding: 20px 35px;
   }
-  #event-header { font-size: 36px; }
+  #event-header { font-size: 30px; }
   #events-container {
-    font-size: 28px;
+    font-size: 20px;
   }
   #event-log {
     width: 600px;  /* Larger on 4K but still under 25% */
     padding: 15px;
-    font-size: 30px;
+    font-size: 20px;
   }
   .event-item {
     margin: 6px 0;

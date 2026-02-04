@@ -13,14 +13,25 @@
   let globeInstance = null;
   let coordinateCache = new Map();  // Cache for coordinate conversions
 
+  // Performance tracking for adaptive sampling
+  let arcsAddedLastSecond = 0;
+  let lastSampleResetTime = Date.now();
+  let sampleCounter = 0;
+
   // Arc configuration
   const GLOBE_RADIUS = 100;  // Globe.GL default radius
-  const ARC_ALTITUDE_FACTOR = 0.8;  // Height of arc trajectory - ballistic missile style (increased for high arc)
-  const ARC_SEGMENTS = 128;  // Smoothness of arc curve (increased from 64 for smoother arcs)
-  const ARC_ANIMATION_DURATION = 3000;  // 3 seconds in milliseconds (increased from 1500ms)
-  const VISIBLE_SEGMENT_RATIO = 0.5;  // 50% of arc visible at once (increased from 0.4)
-  const COUNTRY_FLASH_DURATION = 500;  // Duration of country flash animation in ms
-  const COUNTRY_FLASH_DELAY = 300;  // Delay before arc starts after flash begins
+  const ARC_ALTITUDE_FACTOR = 0.8;  // Height of arc trajectory - ballistic missile style
+  const ARC_SEGMENTS = 64;  // Reduced from 128 for better performance
+  const ARC_RADIAL_SEGMENTS = 6;  // Reduced from 8 for better performance
+  const ARC_ANIMATION_DURATION = 2000;  // Reduced from 3000ms to clear faster
+  const VISIBLE_SEGMENT_RATIO = 0.5;  // 50% of arc visible at once
+  const COUNTRY_FLASH_DURATION = 400;  // Reduced from 500ms
+  const COUNTRY_FLASH_DELAY = 200;  // Reduced from 300ms
+
+  // Performance limits
+  const MAX_ARCS = 150;  // Hard limit on concurrent arcs (was unlimited)
+  const HIGH_VOLUME_THRESHOLD = 100;  // Arcs/second before sampling kicks in
+  const SAMPLE_RATE_HIGH_VOLUME = 10;  // Show 1 in N arcs when over threshold
 
   // Country/region-based color mapping for visual distinction
   // Colors chosen for NOC visibility and regional grouping
@@ -79,7 +90,7 @@
   };
 
   /**
-   * Get color for a country code
+   * Get color for a country code (internal - returns hex number)
    * @param {string} countryCode - ISO 2-letter country code
    * @returns {number} Color as hex value
    */
@@ -88,6 +99,17 @@
     const code = countryCode.toUpperCase();
     return COUNTRY_COLORS[code] || COUNTRY_COLORS.default;
   }
+
+  /**
+   * Get color for a country code as CSS hex string
+   * Exposed globally for use by stats panels and event log
+   * @param {string} countryCode - ISO 2-letter country code
+   * @returns {string} Color as CSS hex string (e.g., '#ff0000')
+   */
+  window.getCountryColorHex = function(countryCode) {
+    const color = getCountryColor(countryCode);
+    return '#' + color.toString(16).padStart(6, '0');
+  };
 
   /**
    * Convert lat/lng coordinates to 3D Cartesian coordinates
@@ -154,7 +176,8 @@
    */
   function createArcGeometry(curve) {
     // Use TubeGeometry to create thicker arcs
-    const geometry = new THREE.TubeGeometry(curve, ARC_SEGMENTS, 0.3, 8, false);  // Radius 0.3 for visible thickness
+    // Reduced segments for better performance (was 128, 8)
+    const geometry = new THREE.TubeGeometry(curve, ARC_SEGMENTS, 0.3, ARC_RADIAL_SEGMENTS, false);
     return geometry;
   }
 
@@ -166,8 +189,8 @@
    * @returns {THREE.Mesh} Arrow head mesh
    */
   function createArrowHead(position, direction, color) {
-    // Larger, more visible arrow head
-    const arrowGeometry = new THREE.ConeGeometry(1.5, 4.5, 8);  // Increased from (1.0, 3.0) for better visibility
+    // Visible arrow head with reduced segments for performance
+    const arrowGeometry = new THREE.ConeGeometry(1.5, 4.5, 6);  // Reduced from 8 segments
     const arrowMaterial = new THREE.MeshBasicMaterial({
       color: color,
       transparent: true,
@@ -198,7 +221,7 @@
     // Create sphere at source location (slightly above globe surface)
     const position = latLngToCartesian(lat, lng, 0.02);  // Small altitude offset
 
-    const flashGeometry = new THREE.SphereGeometry(3, 16, 16);  // Visible size
+    const flashGeometry = new THREE.SphereGeometry(3, 8, 8);  // Reduced from 16,16 for performance
     const flashMaterial = new THREE.MeshBasicMaterial({
       color: color,
       transparent: true,
@@ -212,6 +235,31 @@
   }
 
   /**
+   * Check if arc should be sampled (skipped) based on current volume
+   * @returns {boolean} True if arc should be skipped
+   */
+  function shouldSkipArc() {
+    const now = Date.now();
+
+    // Reset counter every second
+    if (now - lastSampleResetTime >= 1000) {
+      arcsAddedLastSecond = sampleCounter;
+      sampleCounter = 0;
+      lastSampleResetTime = now;
+    }
+
+    sampleCounter++;
+
+    // If we're over the high volume threshold, sample
+    if (arcsAddedLastSecond > HIGH_VOLUME_THRESHOLD) {
+      // Only show 1 in SAMPLE_RATE_HIGH_VOLUME arcs
+      return (sampleCounter % SAMPLE_RATE_HIGH_VOLUME) !== 0;
+    }
+
+    return false;
+  }
+
+  /**
    * Add custom animated arc to globe
    * @param {Object} arcData - Arc data object
    * @param {number} arcData.startLat - Starting latitude
@@ -221,19 +269,37 @@
    * @param {string} arcData.threatType - Threat type for coloring
    */
   window.addCustomArc = function(arcData) {
+    // Adaptive sampling - skip arcs when volume is high
+    if (shouldSkipArc()) {
+      return;
+    }
+
+    // Enforce hard limit on concurrent arcs
+    if (animatingArcs.length >= MAX_ARCS) {
+      // Remove oldest arc to make room
+      const oldestArc = animatingArcs.shift();
+      if (oldestArc && globeInstance) {
+        const scene = globeInstance.scene();
+        scene.remove(oldestArc.line);
+        scene.remove(oldestArc.arrowHead);
+        if (oldestArc.countryFlash.visible) {
+          scene.remove(oldestArc.countryFlash);
+        }
+        oldestArc.geometry.dispose();
+        oldestArc.material.dispose();
+        oldestArc.arrowMaterial.dispose();
+        oldestArc.countryFlash.geometry.dispose();
+        oldestArc.flashMaterial.dispose();
+      }
+    }
+
     // Get globe instance
     if (!globeInstance) {
       globeInstance = window.getGlobe();
       if (!globeInstance) {
-        console.warn('Globe not initialized - cannot add custom arc');
-        return;
+        return;  // Silent fail - no console.warn in hot path
       }
     }
-
-    // Debug: Log all arc coordinates
-    console.log('[Custom Arc] Creating arc:');
-    console.log('  Start:', arcData.startLat.toFixed(4), arcData.startLng.toFixed(4), '(' + (arcData.countryCode || 'Unknown') + ')');
-    console.log('  End:', arcData.endLat.toFixed(4), arcData.endLng.toFixed(4), '(OCDE)');
 
     // Create arc curve
     const curve = createArcCurve(
@@ -307,11 +373,6 @@
     if (!animationFrameId) {
       animationFrameId = requestAnimationFrame(animateArcs);
     }
-
-    console.log('[Custom Arc Added]', arcData.countryCode || 'Unknown', '->', 'OCDE',
-                `Start: (${arcData.startLat.toFixed(2)}, ${arcData.startLng.toFixed(2)})`,
-                `End: (${arcData.endLat.toFixed(2)}, ${arcData.endLng.toFixed(2)})`,
-                `(${animatingArcs.length} active)`);
   };
 
   /**
@@ -391,8 +452,7 @@
         // Update draw range to show traveling segment
         // TubeGeometry uses indexed rendering, so we need to work with triangle indices
         // Each segment has radialSegments*2 triangles, each triangle has 3 indices
-        const radialSegments = 8;  // Must match the 4th parameter in TubeGeometry (line 97)
-        const trianglesPerSegment = radialSegments * 2;
+        const trianglesPerSegment = ARC_RADIAL_SEGMENTS * 2;
         const indicesPerSegment = trianglesPerSegment * 3;
 
         const drawStart = Math.floor(segmentStart * ARC_SEGMENTS * indicesPerSegment);
@@ -433,10 +493,6 @@
 
       // Remove from array
       animatingArcs.splice(index, 1);
-
-      console.debug('[Custom Arc Removed]',
-                    arcAnim.metadata.countryCode || 'Unknown',
-                    `(${animatingArcs.length} active)`);
     }
 
     // Continue animation loop if there are still active arcs
@@ -484,6 +540,21 @@
     return animatingArcs.length;
   };
 
-  console.log('Custom arc animation module loaded');
+  /**
+   * Get performance statistics
+   * @returns {Object} Performance stats
+   */
+  window.getArcPerformanceStats = function() {
+    return {
+      activeArcs: animatingArcs.length,
+      maxArcs: MAX_ARCS,
+      arcsPerSecond: arcsAddedLastSecond,
+      highVolumeThreshold: HIGH_VOLUME_THRESHOLD,
+      isSampling: arcsAddedLastSecond > HIGH_VOLUME_THRESHOLD,
+      sampleRate: arcsAddedLastSecond > HIGH_VOLUME_THRESHOLD ? `1:${SAMPLE_RATE_HIGH_VOLUME}` : '1:1'
+    };
+  };
+
+  console.log('Custom arc module loaded - Max:', MAX_ARCS, 'arcs, Sampling at >', HIGH_VOLUME_THRESHOLD, '/sec');
 
 })();

@@ -68,7 +68,7 @@ function getPasswordHash() {
  * Get current password (plain text from env, for initial login only)
  */
 function getCurrentPassword() {
-  return process.env.DASHBOARD_PASSWORD || 'change-me';
+  return process.env.DASHBOARD_PASSWORD || 'ChangeMe';
 }
 
 /**

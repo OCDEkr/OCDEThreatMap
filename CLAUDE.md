@@ -235,7 +235,7 @@ echo '<14>1 2024-01-26T10:00:00Z PA-VM - - - [pan@0 src=192.168.1.100 dst=10.0.0
 |----------|----------|-------------|---------|
 | `SESSION_SECRET` | Yes (prod) | Express session signing key | `ocde-threat-map-change-in-production` |
 | `DASHBOARD_USERNAME` | No | Dashboard login username | `admin` |
-| `DASHBOARD_PASSWORD` | Yes (prod) | Dashboard login password | `change-me` |
+| `DASHBOARD_PASSWORD` | Yes (prod) | Dashboard login password | `ChangeMe` |
 | `SYSLOG_PORT` | No | UDP syslog port | `514` |
 | `OCDE_IP_RANGES` | No | CIDR ranges for OCDE target detection | (empty) |
 

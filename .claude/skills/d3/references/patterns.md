@@ -4,8 +4,8 @@
 - Geographic Projections
 - SVG Structure and Layering
 - Data Binding with GeoJSON
-- Transition Animations
-- Gradient Definitions
+- Transition and requestAnimationFrame Animations
+- Country Color Coordination
 - Resize Handling
 
 ---
@@ -15,7 +15,7 @@
 ### Equirectangular Projection (Current Implementation)
 
 ```javascript
-// public/js/flat-map-d3.js:47-52
+// public/js/flat-map-d3.js:120-125
 projection = d3.geoEquirectangular()
   .scale(width / (2 * Math.PI))
   .translate([width / 2, height / 2])
@@ -24,19 +24,28 @@ projection = d3.geoEquirectangular()
 path = d3.geoPath(projection);
 ```
 
-**Why Equirectangular:** Shows the full world without cutoff at antimeridian. Mercator distorts polar regions and cuts at 180°/-180°.
+**Why Equirectangular:** Shows full world without cutoff at antimeridian. Mercator distorts polar regions and clips at 180°/-180°.
 
 ### WARNING: Coordinate Order Matters
 
-```javascript
-// BAD - lat/lng order (geographic convention)
-const point = projection([lat, lng]);
+**The Problem:**
 
-// GOOD - lng/lat order (D3 convention)
-const point = projection([lng, lat]);
+```javascript
+// BAD - geographic convention (lat, lng)
+const point = projection([srcLat, srcLng]);
 ```
 
-**Why This Breaks:** D3 follows GeoJSON spec where coordinates are `[longitude, latitude]`. Swapping causes points to render in wrong locations.
+**Why This Breaks:** D3 follows GeoJSON spec: coordinates are `[longitude, latitude]`. Swapping causes points to render in completely wrong locations — a common source of arcs appearing to originate from the ocean.
+
+**The Fix:**
+
+```javascript
+// GOOD - D3/GeoJSON convention (lng, lat)
+const source = projection([srcLng, srcLat]);
+const target = projection([dstLng, dstLat]);
+```
+
+**When You Might Be Tempted:** Every time you receive data from the enrichment pipeline (`data.geo.latitude`, `data.geo.longitude`) — the natural instinct is lat-first.
 
 ---
 
@@ -45,21 +54,29 @@ const point = projection([lng, lat]);
 ### Layer Groups for Z-Index Control
 
 ```javascript
-// public/js/flat-map-d3.js:54-57
-const mapGroup = svg.append('g').attr('class', 'map-group');      // Bottom
-statesGroup = svg.append('g').attr('class', 'states-group');       // Middle
-arcsGroup = svg.append('g').attr('class', 'arcs-group');           // Top
+// public/js/flat-map-d3.js:128-130 — order determines visual stacking
+const mapGroup = svg.append('g').attr('class', 'map-group');      // Bottom: countries
+statesGroup = svg.append('g').attr('class', 'states-group');       // Middle: US states
+arcsGroup = svg.append('g').attr('class', 'arcs-group');           // Top: attack animations
 ```
 
-**Why:** SVG renders in document order. Arc animations must appear above country boundaries.
+**Why:** SVG renders in document order (no CSS z-index). Arc animations must render above country fills and borders.
 
 ### WARNING: Clearing SVG Elements
 
-```javascript
-// BAD - removes the entire SVG
-d3.select('#container').remove();
+**The Problem:**
 
-// GOOD - clears children, keeps container
+```javascript
+// BAD - removes the container itself
+d3.select('#flat-map-container').remove();
+```
+
+**Why This Breaks:** Removes the DOM container, breaking subsequent `initD3FlatMap()` calls. The container is created once and reused.
+
+**The Fix:**
+
+```javascript
+// GOOD - clears children, preserves container
 d3.select('#flat-map-container').selectAll('*').remove();
 ```
 
@@ -67,52 +84,59 @@ d3.select('#flat-map-container').selectAll('*').remove();
 
 ## Data Binding with GeoJSON
 
-### Enter Pattern for Initial Render
+### Enter Pattern for Country Rendering
 
 ```javascript
-// public/js/flat-map-d3.js:66-74
+// public/js/flat-map-d3.js:139-147
 mapGroup.selectAll('path')
   .data(countries.features)
   .enter()
   .append('path')
   .attr('d', path)
-  .attr('fill', '#001a33')
-  .attr('stroke', '#00ffff')
+  .attr('fill', '#001a33')    // Dark landmasses (NOC theme)
+  .attr('stroke', '#00ffff')  // Cyan borders
   .attr('stroke-width', 0.5)
   .attr('opacity', 0.9);
 ```
 
+See the **frontend-design** skill for the full NOC color palette.
+
 ### TopoJSON to GeoJSON Conversion
 
 ```javascript
-// REQUIRED: topojson library must be loaded
+// REQUIRED: topojson library loaded from CDN before flat-map-d3.js
 const countries = topojson.feature(world, world.objects.countries);
+const states = topojson.feature(us, us.objects.states);
 ```
 
-**Why:** TopoJSON is 80% smaller than GeoJSON. CDN provides TopoJSON format.
+**Why TopoJSON:** ~80% smaller than GeoJSON. CDN serves `world-atlas@2` (countries) and `us-atlas@3` (states).
 
-### WARNING: Missing TopoJSON Library
+### US States as Optional Overlay
 
 ```javascript
-// BAD - crashes if topojson not loaded
-const countries = topojson.feature(world, world.objects.countries);
-
-// GOOD - check availability
-if (typeof topojson === 'undefined') {
-  console.error('TopoJSON library not loaded');
-  return;
-}
-const countries = topojson.feature(world, world.objects.countries);
+// public/js/flat-map-d3.js:176-186 — thinner, semi-transparent borders
+statesGroup.selectAll('path')
+  .data(states.features)
+  .enter()
+  .append('path')
+  .attr('d', path)
+  .attr('fill', 'none')
+  .attr('stroke', '#00ffff')
+  .attr('stroke-width', 0.3)
+  .attr('stroke-opacity', 0.5)
+  .attr('class', 'us-state');
 ```
+
+**Failure mode:** US states load after countries. CDN failure is non-fatal (`console.warn`, not `console.error`).
 
 ---
 
-## Transition Animations
+## Transition and requestAnimationFrame Animations
 
-### Chained Transitions for Pulsing
+### Chained Transitions for Source Flash
 
 ```javascript
-// public/js/flat-map-d3.js:183-206
+// public/js/flat-map-d3.js:255-279 — 4-pulse flash effect
 flash.transition()
   .duration(125).attr('r', 10).attr('opacity', 0.7)
   .transition()
@@ -122,68 +146,74 @@ flash.transition()
   .transition()
   .duration(125).attr('r', 8).attr('opacity', 0.5)
   .on('end', function() {
-    d3.select(this)
-      .transition()
-      .duration(300)
-      .attr('opacity', 0)
-      .remove();
+    d3.select(this).transition().duration(300).attr('opacity', 0).remove();
   });
 ```
 
-### Arc Fade-In and Fade-Out
+### Traveling Arc via requestAnimationFrame
+
+The arc animation does NOT use D3 transitions. It uses `requestAnimationFrame` with an invisible SVG reference path for `getPointAtLength()`:
 
 ```javascript
-// public/js/flat-map-d3.js:257-266
-arc.transition()
-  .duration(500).attr('opacity', 0.8)    // Fade in
-  .transition()
-  .duration(2000).attr('opacity', 0.3)   // Hold
-  .transition()
-  .duration(1000).attr('opacity', 0)     // Fade out
-  .remove();                              // Cleanup
+// public/js/flat-map-d3.js:343-414
+function animateArc() {
+  const progress = Math.min(elapsed / arcDuration, 1);
+  const headPos = progress * pathLength;
+  const tailPos = Math.max(0, headPos - (pathLength * 0.35));
+
+  // Sample 20 points along the visible segment
+  let pathD = '';
+  for (let i = 0; i <= 20; i++) {
+    const t = tailPos + (segmentLength * i / 20);
+    const pt = refPath.node().getPointAtLength(t);
+    pathD += i === 0 ? `M${pt.x},${pt.y}` : ` L${pt.x},${pt.y}`;
+  }
+  arc.attr('d', pathD);
+
+  // Position arrow at head using tangent for rotation
+  const headPoint = refPath.node().getPointAtLength(headPos);
+  const nextPoint = refPath.node().getPointAtLength(Math.min(headPos + 3, pathLength));
+  const angle = Math.atan2(nextPoint.y - headPoint.y, nextPoint.x - headPoint.x) * 180 / Math.PI + 90;
+  arrow.attr('transform', `translate(${headPoint.x},${headPoint.y}) rotate(${angle})`);
+
+  requestAnimationFrame(animateArc);
+}
 ```
+
+See the **three-js** skill for the equivalent 3D arc animation in `custom-arcs.js`.
 
 ### WARNING: Memory Leaks from Orphaned Elements
 
-```javascript
-// BAD - element persists after animation
-arc.transition().duration(1000).attr('opacity', 0);
+**The Problem:**
 
-// GOOD - remove after fade completes
-arc.transition().duration(1000).attr('opacity', 0).remove();
+```javascript
+// BAD - element persists invisible after animation
+arc.transition().duration(1000).attr('opacity', 0);
 ```
 
-**Why:** SVG elements accumulate without `.remove()`, degrading performance.
+**Why This Breaks:** SVG elements accumulate without removal. Under high attack volume (100+ events/sec), thousands of invisible elements degrade browser performance.
+
+**The Fix:**
+
+```javascript
+// GOOD - remove after fade, also remove reference path
+arc.transition().duration(400).attr('opacity', 0).remove();
+arrow.transition().duration(400).attr('opacity', 0).remove();
+refPath.remove();
+```
 
 ---
 
-## Gradient Definitions
+## Country Color Coordination
 
-### Linear Gradient for Arc Stroke
+The D3 flat map and 3D globe share the same color scheme. Colors are duplicated in two files:
 
-```javascript
-// public/js/flat-map-d3.js:230-245
-const gradientId = 'arc-gradient-' + Date.now() + '-' + Math.random();
+| File | Format | Used By |
+|------|--------|---------|
+| `public/js/flat-map-d3.js` | `'#ff0000'` (CSS hex) | D3 SVG fills and strokes |
+| `public/js/custom-arcs.js` | `0xff0000` (JS hex number) | Three.js material colors |
 
-const gradient = svg.append('defs')
-  .append('linearGradient')
-  .attr('id', gradientId)
-  .attr('x1', '0%').attr('y1', '0%')
-  .attr('x2', '100%').attr('y2', '0%');
-
-gradient.append('stop')
-  .attr('offset', '0%')
-  .attr('stop-color', color[0]);
-
-gradient.append('stop')
-  .attr('offset', '100%')
-  .attr('stop-color', color[1]);
-
-// Apply gradient
-arc.attr('stroke', `url(#${gradientId})`);
-```
-
-**Why unique IDs:** Multiple arcs with same gradient ID cause visual glitches.
+**WARNING:** These maps must stay synchronized. Adding a country to one file without the other causes inconsistent colors between globe and flat map views.
 
 ---
 
@@ -192,7 +222,7 @@ arc.attr('stroke', `url(#${gradientId})`);
 ### Update Projection on Window Resize
 
 ```javascript
-// public/js/flat-map-d3.js:324-341
+// public/js/flat-map-d3.js:454-471
 function handleResize() {
   const width = window.innerWidth;
   const height = window.innerHeight;
@@ -203,18 +233,15 @@ function handleResize() {
     .scale(width / 2 / Math.PI)
     .translate([width / 2, height / 2]);
 
-  // Redraw all paths with new projection
+  // Redraw all geographic paths with updated projection
   svg.selectAll('.map-group path').attr('d', path);
 }
 ```
 
-### WARNING: Resize Listener Cleanup
+### WARNING: Resize Listener Lifecycle
 
 ```javascript
-// BAD - listener persists after component unmount
-window.addEventListener('resize', handleResize);
-
-// GOOD - remove when stopping flat map
+// GOOD - add/remove listener with view toggle
 window.startD3FlatMap = function() {
   window.addEventListener('resize', handleResize);
 };
@@ -223,3 +250,5 @@ window.stopD3FlatMap = function() {
   window.removeEventListener('resize', handleResize);
 };
 ```
+
+**Why:** Leaving the listener active when globe view is showing causes unnecessary projection recalculations on every resize.

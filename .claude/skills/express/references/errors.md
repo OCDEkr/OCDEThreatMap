@@ -2,7 +2,8 @@
 
 ## Contents
 - Error Philosophy
-- Route Error Handling
+- Route Error Patterns
+- Multer Error Handling
 - Service Error Handling
 - Dead Letter Queue
 - Graceful Shutdown
@@ -10,65 +11,89 @@
 
 ## Error Philosophy
 
-**Never crash the pipeline.** This is a real-time visualization system. A malformed syslog message should not bring down the entire application.
+**Never crash the pipeline.** This is a NOC display running 24/7. A malformed syslog message, a broken WebSocket client, or a failed geo lookup must NEVER bring down the application.
 
-| Layer | Strategy |
-|-------|----------|
-| Routes | Return appropriate HTTP status, log error |
-| Services | Emit error event, continue processing |
-| Sockets | Log error, terminate single client, continue |
-| Parse failures | Log to DLQ, continue processing |
+| Layer | Strategy | Consequence of Failure |
+|-------|----------|----------------------|
+| Routes | Return HTTP status + JSON error | Client sees error message |
+| Parser | Emit `parse-error`, log to DLQ | Single message lost, pipeline continues |
+| Enrichment | Emit with `geo: null` | Arc renders without geo data |
+| WebSocket | Terminate broken client | Other clients unaffected |
+| File I/O | Log error, continue | DLQ entry may be lost |
+| Uncaught | Log stack trace, do NOT exit | Process stays alive |
 
-## Route Error Handling
+## Route Error Patterns
 
-### Standard Error Response
+### Standard JSON Error Responses
 
 ```javascript
-// Validation error
-res.status(400).json({ error: 'Username required' });
+// Input validation (400)
+if (!username || !password) {
+  return res.status(400).json({ success: false, error: 'Username and password are required' });
+}
 
-// Auth error
+// Authentication failure (401) — generic message prevents enumeration
 res.status(401).json({ success: false, error: 'Invalid credentials' });
 
-// Server error
-res.status(500).json({ error: 'Operation failed' });
+// Not found (404)
+res.status(404).json({ success: false, error: `Setting '${key}' not found` });
+
+// Rate limited (429)
+res.status(429).json({ success: false, error: 'Too many login attempts.' });
+
+// Server error (500) — log details internally, generic to client
+console.error('[Password] Hash error:', err);
+res.status(500).json({ success: false, error: 'Failed to change password' });
 ```
 
 ### Session Destruction Error
 
 ```javascript
-router.post('/', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      console.error('Session destruction error:', err);
-      return res.status(500).json({ error: 'Logout failed' });
-    }
-    res.json({ success: true });
-  });
+// src/routes/logout.js
+req.session.destroy((err) => {
+  if (err) {
+    console.error('Session destruction error:', err);
+    return res.status(500).json({ error: 'Logout failed' });
+  }
+  res.clearCookie('ocde.sid');
+  res.json({ success: true });
 });
 ```
 
-## Service Error Handling
+## Multer Error Handling
 
-### Graceful Degradation Pattern
+File upload errors require a 4-argument error middleware on the router:
 
 ```javascript
-// src/enrichment/enrichment-pipeline.js
+// src/routes/logo.js — MUST be last middleware on the router
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, error: 'File too large. Maximum size is 5MB.' });
+    }
+    return res.status(400).json({ success: false, error: err.message });
+  }
+  if (err) {
+    return res.status(400).json({ success: false, error: err.message });
+  }
+  next();
+});
+```
+
+**When You'll Hit This:** Multer throws `MulterError` for file size violations. Custom `fileFilter` errors throw generic `Error`. Both must be caught.
+
+## Service Error Handling
+
+### Enrichment Pipeline Graceful Degradation
+
+```javascript
 enrich(event) {
   try {
     const geoData = this.geoLocator.get(event.sourceIP);
     this.eventBus.emit('enriched', { ...event, geo: geoData });
   } catch (err) {
     console.error('[EnrichmentPipeline] Enrichment error:', err.message);
-    
-    // Emit event anyway with error flag
-    this.eventBus.emit('enriched', {
-      ...event,
-      geo: null,
-      enrichmentError: err.message
-    });
-    
-    this.emit('enrichment:error', { event, error: err });
+    this.eventBus.emit('enriched', { ...event, geo: null, enrichmentError: err.message });
   }
 }
 ```
@@ -76,82 +101,59 @@ enrich(event) {
 ### Receiver Error Handling
 
 ```javascript
+// src/app.js — socket errors logged but never terminate receiver
 receiver.on('error', (err) => {
   console.error('Receiver error:', err);
-  // Don't crash - continue operation
 });
 ```
 
-## Dead Letter Queue
-
-Failed parse attempts go to `logs/failed-messages.jsonl`:
+### Parse Error to DLQ
 
 ```javascript
-// src/utils/error-handler.js
-class DeadLetterQueue {
-  add(rawMessage, error) {
-    const entry = {
-      timestamp: new Date().toISOString(),
-      error: error.message || 'Unknown error',
-      rawMessage: rawMessage.substring(0, 500),  // Truncate large messages
-      retryCount: 0
-    };
-    
-    this.failedMessages.push(entry);
-    
-    try {
-      fs.appendFileSync(this.failedMessagesFile, JSON.stringify(entry) + '\n');
-    } catch (writeErr) {
-      // File write failure shouldn't crash app
-      console.error('DLQ: Failed to write to file:', writeErr.message);
-    }
-  }
-}
-```
-
-### Wiring DLQ to Parse Errors
-
-```javascript
-// src/app.js
 eventBus.on('parse-error', (error) => {
   totalFailed++;
   dlq.add(error.rawMessage, new Error(error.error));
 });
 ```
 
+## Dead Letter Queue
+
+`src/utils/error-handler.js` — dual storage: in-memory array + JSONL file:
+
+```javascript
+class DeadLetterQueue {
+  add(rawMessage, error) {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      error: error.message || 'Unknown error',
+      rawMessage: rawMessage.substring(0, 500),
+      retryCount: 0
+    };
+    this.failedMessages.push(entry);
+    try {
+      fs.appendFileSync(this.failedMessagesFile, JSON.stringify(entry) + '\n');
+    } catch (writeErr) {
+      console.error('DLQ: Failed to write:', writeErr.message);
+    }
+  }
+}
+```
+
 ## Graceful Shutdown
 
 ```javascript
 process.on('SIGINT', () => {
-  console.log('Shutting down...');
-  
-  // Log final metrics
   console.log(`Final: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}`);
-  
-  // Stop components in order
   server.close(() => console.log('HTTP server closed'));
   receiver.stop();
   enrichmentPipeline.shutdown();
-  
   process.exit(0);
 });
 
-// Also handle SIGTERM
-process.on('SIGTERM', () => {
-  server.close();
-  receiver.stop();
-  enrichmentPipeline.shutdown();
-  process.exit(0);
-});
-```
-
-### Uncaught Exception Handler
-
-```javascript
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
   console.error('Stack:', err.stack);
-  // Don't exit - try to continue (controversial but intentional here)
+  // Do NOT exit — keep pipeline alive
 });
 ```
 
@@ -160,63 +162,67 @@ process.on('uncaughtException', (err) => {
 **The Problem:**
 
 ```javascript
-// BAD - error disappears silently
+// BAD — error vanishes
 try {
   const data = riskyOperation();
 } catch (err) {
-  // Nothing - error is swallowed
+  // Nothing
 }
 ```
 
 **Why This Breaks:**
-1. No visibility into failures
-2. Impossible to debug production issues
-3. Data silently lost
+1. No visibility into failures — impossible to debug
+2. Data silently lost
+3. "Never crash" means "log and continue", not "ignore and continue"
 
 **The Fix:**
 
 ```javascript
-// GOOD - log and continue
+// GOOD — log context and continue
 try {
   const data = riskyOperation();
 } catch (err) {
-  console.error('Operation failed:', err.message);
-  // Either rethrow, emit event, or handle explicitly
+  console.error('[Module] Operation failed:', err.message);
 }
 ```
 
-## WARNING: Leaking Internal Errors
+## WARNING: Leaking Internal Errors to Clients
 
 **The Problem:**
 
 ```javascript
-// BAD - exposing internals to client
-router.get('/data', (req, res) => {
-  try {
-    const data = getData();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.stack });  // Exposes internals!
-  }
-});
+// BAD — stack trace sent to browser
+res.status(500).json({ error: err.stack });
 ```
 
 **Why This Breaks:**
-1. Security risk - reveals file paths, library versions
-2. Confuses users with technical details
-3. May expose sensitive data
+1. Reveals file paths, library versions, Node.js internals
+2. May expose sensitive data in error messages
+3. OWASP information disclosure vulnerability
 
 **The Fix:**
 
 ```javascript
-// GOOD - log internally, return generic message
-router.get('/data', (req, res) => {
+// GOOD — log full error internally, generic message to client
+console.error('[Route] getData failed:', err);
+res.status(500).json({ success: false, error: 'Failed to fetch data' });
+```
+
+## WARNING: Missing Error Handler on Async Routes
+
+**The Problem:** Express 5.x catches rejected promises in async handlers automatically, but without error middleware the default handler sends HTML.
+
+**The Fix:**
+
+```javascript
+// GOOD — explicit try/catch returns JSON
+router.post('/', async (req, res) => {
   try {
-    const data = getData();
-    res.json(data);
+    const hash = await hashPassword(req.body.newPassword);
+    res.json({ success: true });
   } catch (err) {
-    console.error('getData failed:', err);  // Full details in logs
-    res.status(500).json({ error: 'Failed to fetch data' });  // Generic to client
+    console.error('[Password] Hash error:', err);
+    res.status(500).json({ success: false, error: 'Failed to change password' });
   }
 });
 ```
@@ -224,9 +230,18 @@ router.get('/data', (req, res) => {
 ## Error Handling Checklist
 
 Copy this checklist and track progress:
-- [ ] All routes have error responses with appropriate status codes
-- [ ] Services emit events on error (don't throw into void)
+- [ ] All routes return `{ success: false, error: 'message' }` on failure
+- [ ] No internal errors (stack traces, file paths) exposed to clients
 - [ ] Parse failures logged to DLQ with context
-- [ ] SIGINT/SIGTERM handlers for graceful shutdown
-- [ ] No internal errors exposed to clients
-- [ ] Console errors include enough context for debugging
+- [ ] Service errors emit events or log — never swallowed silently
+- [ ] SIGINT and SIGTERM handlers stop all components
+- [ ] Multer routes have 4-argument error middleware
+- [ ] Async routes have try/catch with JSON error responses
+
+## Validation Loop
+
+1. Make changes
+2. Verify: `node src/app.js` starts without errors
+3. Test error paths: `curl -X POST http://localhost:3000/login -H 'Content-Type: application/json' -d '{}'`
+4. Expected: `{"success":false,"error":"Username and password are required"}`
+5. If unexpected response, check middleware order and error handlers, then repeat from step 2

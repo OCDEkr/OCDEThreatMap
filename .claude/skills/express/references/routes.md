@@ -1,174 +1,207 @@
 # Routes Reference
 
 ## Contents
-- Route Structure
-- Route Patterns
-- Mounting Routes
-- Protected Routes
+- Route Inventory
+- Route Module Pattern
+- Mounting and Rate Limiting
+- File Upload Routes
+- Static File Serving
 - Anti-Patterns
 
-## Route Structure
+## Route Inventory
 
-Routes live in `src/routes/` as separate modules. Each exports an `express.Router()` instance.
+All routes live in `src/routes/`. Inline routes defined in `src/app.js`.
 
-```
-src/routes/
-├── login.js     # POST /login - credential validation
-└── logout.js    # POST /logout - session destruction
-```
+| Method | Path | Auth | Rate Limit | Handler |
+|--------|------|------|------------|---------|
+| GET | `/` | No | No | Redirect to `/dashboard` (inline) |
+| GET | `/dashboard` | No | No | Serve `dashboard.html` (inline) |
+| GET | `/login` | No | No | Serve `login.html`, redirect if authed (inline) |
+| GET | `/admin` | Yes | No | Serve `admin.html` (inline) |
+| GET | `/api/auth/status` | No | API | Auth state check (inline) |
+| POST | `/login` | No | 5/15min | `src/routes/login.js` |
+| POST | `/logout` | No | No | `src/routes/logout.js` |
+| POST | `/api/change-password` | Yes | 3/hr | `src/routes/change-password.js` |
+| GET | `/api/settings` | No | API | `src/routes/settings.js` |
+| GET | `/api/settings/:key` | No | API | `src/routes/settings.js` |
+| PUT | `/api/settings` | Yes | API | `src/routes/settings.js` |
+| PUT | `/api/settings/:key` | Yes | API | `src/routes/settings.js` |
+| GET | `/api/logo` | No | API | `src/routes/logo.js` |
+| POST | `/api/logo` | Yes | API | `src/routes/logo.js` (Multer) |
+| DELETE | `/api/logo` | Yes | API | `src/routes/logo.js` |
 
-## Route Patterns
+## Route Module Pattern
 
-### Basic POST Route
+Every route file follows the same structure:
 
 ```javascript
-// src/routes/login.js
+// src/routes/my-route.js
 const express = require('express');
 const router = express.Router();
+const { requireAuth } = require('../middleware/auth-check');
 
-router.post('/', (req, res) => {
-  const { username, password } = req.body;
-  
-  if (username === validUsername && password === validPassword) {
-    req.session.userId = username;
-    req.session.authenticated = true;
-    res.json({ success: true });
-  } else {
-    res.status(401).json({ success: false, error: 'Invalid credentials' });
+// Routes handle '/' because prefix is set at mount time
+router.post('/', async (req, res) => {
+  const { field } = req.body;
+  if (!field) {
+    return res.status(400).json({ success: false, error: 'Field required' });
   }
+  res.json({ success: true });
 });
 
 module.exports = router;
 ```
 
-### Session Destruction Route
+Export pattern — `module.exports = router` for the router, plus named exports for shared state:
 
 ```javascript
-// src/routes/logout.js
-router.post('/', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      console.error('Session destruction error:', err);
-      return res.status(500).json({ error: 'Logout failed' });
-    }
-    res.json({ success: true });
-  });
-});
+// src/routes/change-password.js — exports both router and helpers
+module.exports = router;
+module.exports.getCurrentPassword = getCurrentPassword;
+module.exports.getPasswordHash = getPasswordHash;
+module.exports.isPasswordHashed = isPasswordHashed;
 ```
 
-### File Serving Route
+## Mounting and Rate Limiting
+
+Routes mounted in `src/app.js` with optional middleware chains:
 
 ```javascript
-// Protected dashboard with auth middleware
-app.get('/dashboard', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html'));
-});
-```
-
-## Mounting Routes
-
-Routes are mounted in `src/app.js`:
-
-```javascript
-const loginRouter = require('./routes/login');
-const logoutRouter = require('./routes/logout');
-
-app.use('/login', loginRouter);
+// Simple mount
 app.use('/logout', logoutRouter);
+
+// Rate-limited mount
+app.use('/login', loginLimiter, loginRouter);
+
+// Rate-limited + auth-protected
+app.use('/api/change-password', passwordChangeLimiter, requireAuth, changePasswordRouter);
+
+// Mixed auth (GET public, PUT protected inside router)
+app.use('/api/settings', settingsRouter);
 ```
 
-### Static File Serving
+## File Upload Routes
+
+Logo upload uses Multer with strict validation in `src/routes/logo.js`:
 
 ```javascript
-// Serve public directory
+const multer = require('multer');
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => cb(null, 'custom-logo' + path.extname(file.originalname).toLowerCase())
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml', 'image/webp'];
+  cb(allowedTypes.includes(file.mimetype) ? null : new Error('Invalid file type'), allowedTypes.includes(file.mimetype));
+};
+
+const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } });
+
+router.post('/', requireAuth, upload.single('logo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
+  res.json({ success: true, logoUrl: '/uploads/' + req.file.filename });
+});
+```
+
+Multer errors require a dedicated error handler on the router:
+
+```javascript
+router.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, error: 'File too large. Maximum size is 5MB.' });
+    }
+    return res.status(400).json({ success: false, error: err.message });
+  }
+  if (err) return res.status(400).json({ success: false, error: err.message });
+  next();
+});
+```
+
+## Static File Serving
+
+```javascript
+// Serve entire public directory
 app.use(express.static('public'));
 
-// Serve node_modules library at custom path
-app.use('/js/reconnecting-websocket.min.js', 
+// Alias a node_modules file to a client-accessible path
+app.use('/js/reconnecting-websocket.min.js',
   express.static('node_modules/reconnecting-websocket/dist/reconnecting-websocket-iife.min.js'));
 ```
 
-## Protected Routes
-
-Use `requireAuth` middleware from `src/middleware/auth-check.js`:
-
-```javascript
-const { requireAuth } = require('./middleware/auth-check');
-
-// Single protected route
-app.get('/dashboard', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html'));
-});
-
-// Protected route group (if needed)
-app.use('/api', requireAuth, apiRouter);
-```
-
-## WARNING: Business Logic in Routes
+## WARNING: Business Logic in Route Handlers
 
 **The Problem:**
 
 ```javascript
-// BAD - business logic embedded in route handler
+// BAD — route handler does everything
 router.post('/', async (req, res) => {
   const geo = await maxmind.open('data/GeoLite2-City.mmdb');
   const result = geo.get(req.body.ip);
-  const formatted = { lat: result.location.latitude, ... };
-  res.json(formatted);
+  res.json({ lat: result.location.latitude });
 });
 ```
 
 **Why This Breaks:**
-1. Untestable without HTTP layer
-2. Database/service initialization on every request
-3. Hard to reuse logic elsewhere
+1. Untestable without spinning up HTTP
+2. Service initialization on every request
+3. Cannot reuse logic in WebSocket handlers or event listeners
 
 **The Fix:**
 
 ```javascript
-// GOOD - delegate to service
-const { geoService } = require('../services/geo-service');
-
+// GOOD — thin route, logic in service
+const geoLocator = require('../enrichment/geolocation');
 router.post('/', async (req, res) => {
-  const result = await geoService.lookup(req.body.ip);
-  res.json(result);
+  const result = geoLocator.get(req.body.ip);
+  res.json({ success: true, data: result });
 });
 ```
 
-## WARNING: Missing Input Validation
+## WARNING: Missing Input Validation at Route Boundary
 
 **The Problem:**
 
 ```javascript
-// BAD - trusting req.body blindly
-router.post('/', (req, res) => {
-  const { username, password } = req.body;
-  // No validation - could be undefined, wrong type, etc.
+// BAD — trusting req.body blindly
+router.put('/', requireAuth, (req, res) => {
+  settings[req.body.key] = req.body.value;
 });
 ```
+
+**Why This Breaks:**
+1. Prototype pollution if `key` is `__proto__` or `constructor`
+2. Type confusion if value is unexpected type
+3. Arbitrary property injection
 
 **The Fix:**
 
 ```javascript
-// GOOD - validate at boundary
-router.post('/', (req, res) => {
-  const { username, password } = req.body;
-  
-  if (!username || typeof username !== 'string') {
-    return res.status(400).json({ error: 'Username required' });
+// GOOD — validate against known keys (actual pattern from settings.js)
+for (const [key, value] of Object.entries(updates)) {
+  if (settings.hasOwnProperty(key)) {
+    settings[key] = value;
+    updated.push(key);
   }
-  if (!password || typeof password !== 'string') {
-    return res.status(400).json({ error: 'Password required' });
-  }
-  // Now safe to proceed
-});
+}
 ```
 
-## Redirect Pattern
+## JSON Response Envelope
+
+All API routes use `{ success: boolean }` envelope:
 
 ```javascript
-// Root redirects to dashboard (which then checks auth)
-app.get('/', (req, res) => {
-  res.redirect('/dashboard');
-});
+// Success
+res.json({ success: true, data: result });
+
+// Client error
+res.status(400).json({ success: false, error: 'Validation message' });
+
+// Auth error — generic to prevent enumeration
+res.status(401).json({ success: false, error: 'Invalid credentials' });
+
+// Server error
+res.status(500).json({ success: false, error: 'Operation failed' });
 ```

@@ -4,204 +4,181 @@
 - Database Setup and Updates
 - Testing Geolocation
 - Debugging Lookup Failures
-- Performance Monitoring
+- Performance Monitoring and Cache Tuning
 - Production Deployment
 
 ## Database Setup and Updates
 
 ### Initial Setup
 
-Download GeoLite2-City database from MaxMind (requires free account):
-
 ```bash
-# Create data directory
 mkdir -p data
-
 # Download from MaxMind (replace YOUR_LICENSE_KEY)
-curl -o GeoLite2-City.mmdb.gz \
+curl -o GeoLite2-City.tar.gz \
   "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=YOUR_LICENSE_KEY&suffix=tar.gz"
-
-# Extract and place in data/
-tar -xzf GeoLite2-City.mmdb.gz
+tar -xzf GeoLite2-City.tar.gz
 mv GeoLite2-City_*/GeoLite2-City.mmdb data/
+rm -rf GeoLite2-City.tar.gz GeoLite2-City_*/
 ```
 
-### Database Update Workflow
+Requires a free MaxMind account. GeoLite2-City provides city-level accuracy — sufficient for arcs originating from country centers.
 
-MaxMind updates GeoLite2 weekly. Update process:
+### Database Update Checklist
 
-Copy this checklist and track progress:
+MaxMind updates GeoLite2 weekly. Current config: `watchForUpdates: false`.
+
 - [ ] Download new database from MaxMind
-- [ ] Backup current database: `cp data/GeoLite2-City.mmdb data/GeoLite2-City.mmdb.bak`
-- [ ] Replace database file (no restart needed if `watchForUpdates: true`)
-- [ ] Verify with test lookup
-- [ ] Clear cache if using application-level caching
-
-**Note:** Current config has `watchForUpdates: false`. Enable in production:
-
-```javascript
-// src/enrichment/geolocation.js:28
-watchForUpdates: true  // Auto-reload when .mmdb file changes
-```
+- [ ] Backup current: `cp data/GeoLite2-City.mmdb data/GeoLite2-City.mmdb.bak`
+- [ ] Replace database file in `data/`
+- [ ] Restart application (or set `watchForUpdates: true` for hot reload)
+- [ ] Verify with test lookup against known IP (`8.8.8.8`)
+- [ ] Check cache metrics for anomalies after update
 
 ## Testing Geolocation
 
-### Manual Lookup Test
+### Quick Validation Script
 
 ```javascript
-// Quick test script
 const { GeoLocator } = require('./src/enrichment/geolocation.js');
-
 async function test() {
   const geo = new GeoLocator();
   await geo.initialize();
-
-  // Public IP - should return location
-  console.log('Google DNS:', geo.get('8.8.8.8'));
-
-  // Private IP - should return null
-  console.log('Private:', geo.get('192.168.1.1'));
-
-  // Invalid - should return null
-  console.log('Invalid:', geo.get('not-an-ip'));
+  console.log('Google DNS:', geo.get('8.8.8.8'));     // US coords
+  console.log('Cloudflare:', geo.get('1.1.1.1'));     // AU coords
+  console.log('Private:', geo.get('192.168.1.1'));    // null
+  console.log('Invalid:', geo.get('not-an-ip'));      // null
 }
-
 test();
 ```
 
-### Expected Test Results
+### Integration Test with Cache
 
-| IP | Expected Result |
-|----|-----------------|
-| `8.8.8.8` | US coordinates |
-| `1.1.1.1` | AU coordinates |
-| `192.168.1.1` | `null` (private) |
-| `10.0.0.1` | `null` (private) |
-| `256.1.1.1` | `null` (invalid) |
-| `malformed` | `null` (invalid) |
+```javascript
+const { CachedGeoLocator } = require('./src/enrichment/cache.js');
+async function testCache() {
+  const geo = new CachedGeoLocator();
+  await geo.initialize();
+  geo.get('8.8.8.8');                    // miss
+  geo.get('8.8.8.8');                    // hit
+  geo.get('192.168.1.1');               // miss (null cached)
+  geo.get('192.168.1.1');               // hit (null from cache)
+  const m = geo.getMetrics();
+  console.log(m);                        // hits: 2, misses: 2, hitRate: 50.00
+  console.assert(m.hits === 2, 'Expected 2 hits');
+  console.assert(m.misses === 2, 'Expected 2 misses');
+}
+testCache();
+```
+
+### Full Pipeline Test
+
+```bash
+# Terminal 1 — start server
+SYSLOG_PORT=5514 node src/app.js
+# Terminal 2 — send random attacks
+node test/send-random-attacks.js
+```
+
+Watch for `[ENRICHED]` log lines with geo data and `[GeoCache]` metrics every 30s. See the **syslog-parser** skill for message formats.
 
 ## Debugging Lookup Failures
 
-### Symptom: All lookups return null
+### All Lookups Return Null
 
-1. **Check database file exists:**
-   ```bash
-   ls -la data/GeoLite2-City.mmdb
-   # Should show ~60-70MB file
-   ```
+| Check | Command/Action | Expected |
+|-------|---------------|----------|
+| Database exists | `ls -la data/GeoLite2-City.mmdb` | ~60-70MB file |
+| Init succeeded | Check console for `GeoLocator initialized` | Message present |
+| Traffic is external | Check source IPs in `[ENRICHED]` logs | Public IPs (not 10.x, 192.168.x) |
 
-2. **Verify initialization completed:**
-   ```javascript
-   // Add logging in geolocation.js
-   console.log('GeoLocator initialized with MaxMind GeoLite2-City database');
-   ```
+### Some Public IPs Return Null
 
-3. **Check for corrupted database:**
-   ```bash
-   # Re-download if size is wrong or file is truncated
-   file data/GeoLite2-City.mmdb
-   # Should output: "MaxMind database"
-   ```
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `8.8.8.8:80` returns null | Port in IP string | Strip port before lookup in parser |
+| `2001:db8::1` returns null | IPv6 address | Expected — project only handles IPv4 |
+| Random public IP null | Not in GeoLite2 | Rare — verify with `8.8.8.8` first |
 
-### Symptom: Some IPs fail that should work
+### Diagnosis Loop
 
-1. **Verify IP format:**
-   ```javascript
-   // Must be dotted decimal IPv4
-   geo.get('8.8.8.8');       // ✓ Valid
-   geo.get('8.8.8.8:80');    // ✗ Invalid (includes port)
-   geo.get('2001:4860::');   // ✗ IPv6 not validated
-   ```
+1. Check database exists and is correct size (~60-70MB)
+2. Verify `GeoLocator initialized` log message appeared at startup
+3. Test with known-good IP (`8.8.8.8`) using validation script above
+4. If known-good works, inspect failing IP format (port suffix? IPv6?)
+5. If known-good fails, re-download database and replace
+6. Only proceed when known-good returns valid coordinates
 
-2. **Check if IP is in database:**
-   ```javascript
-   // Some rare public IPs may not be in GeoLite2
-   const result = geo.get('some-ip');
-   if (!result) {
-     console.log('IP not found in database');
-   }
-   ```
+## Performance Monitoring and Cache Tuning
 
-### Symptom: High enrichment latency
+### Metrics Logging
 
-Check cache hit rate. Target is 80%+:
+Enabled by default at 30-second intervals (`enrichment-pipeline.js:29`):
 
 ```javascript
-const metrics = geoLocator.getMetrics();
-console.log(`Hit rate: ${metrics.hitRate}%`);
-// If below 80%, investigate traffic patterns
+this.geoLocator.startMetricsLogging(30000);
+// Output: [GeoCache] Hits: 847 | Misses: 153 | Hit Rate: 84.70% | Cache Size: 153/10000
 ```
 
-**Causes of low hit rate:**
-- Many unique source IPs (DDoS, scan traffic)
-- Cache size too small for traffic volume
-- TTL too short
-
-## Performance Monitoring
-
-### Enable Metrics Logging
-
-```javascript
-// src/enrichment/cache.js:94
-this.geoLocator.startMetricsLogging(30000);  // Every 30 seconds
-```
-
-**Output format:**
-```
-[GeoCache] Hits: 847 | Misses: 153 | Hit Rate: 84.70% | Cache Size: 153/10000
-```
-
-### Metrics to Monitor
-
-| Metric | Target | Action if Off-Target |
+| Metric | Target | Action If Off-Target |
 |--------|--------|---------------------|
-| Hit Rate | >80% | Increase cache size or TTL |
-| Cache Size | <max | Normal operation |
-| Enrichment Time | <5000ms | Check MaxMind internal cache |
+| Hit Rate | >80% | Increase `max` in LRU or extend TTL |
+| Cache Size | <10000 | Normal — LRU eviction working correctly |
+| Enrichment Time | <5000ms | Check MaxMind internal cache, disk I/O |
 
-### Cache Tuning
+### Cache Tuning for High-Cardinality Traffic
 
-If hit rate is consistently low:
+If hit rate stays below 80% (DDoS, port scans, botnets):
 
 ```javascript
-// Increase cache size (memory trade-off)
+// src/enrichment/cache.js — adjust constructor
 this.cache = new LRUCache({
-  max: 50000,  // 5x default
-  ttl: 1000 * 60 * 60 * 4,  // 4 hours TTL
+  max: 50000,                   // 5x default (~10MB extra RAM)
+  ttl: 1000 * 60 * 60 * 4,     // 4 hours TTL
+  updateAgeOnGet: false,
 });
 ```
+
+See the **lru-cache** skill for detailed tuning.
+
+### Tuning Feedback Loop
+
+1. Start server: `SYSLOG_PORT=5514 node src/app.js`
+2. Run simulator: `node test/send-random-attacks.js`
+3. Watch `[GeoCache]` log lines for hit rate
+4. If hit rate < 80% after 100+ lookups, increase `max`
+5. Restart and repeat until hit rate exceeds 80%
 
 ## Production Deployment
 
 ### Pre-Deployment Checklist
 
-Copy this checklist and track progress:
-- [ ] GeoLite2-City.mmdb exists in `data/`
-- [ ] Database file is readable by Node.js process
-- [ ] Memory available for ~100MB (database + cache)
-- [ ] Test lookup works with sample IPs
-- [ ] Metrics logging enabled for monitoring
-- [ ] Consider enabling `watchForUpdates: true`
+- [ ] `data/GeoLite2-City.mmdb` exists and is ~60-70MB
+- [ ] Database readable by Node.js process user
+- [ ] ~100MB memory available for database + cache overhead
+- [ ] Test lookup returns coordinates for `8.8.8.8`
+- [ ] `OCDE_IP_RANGES` env var set if target detection needed
+- [ ] Consider `watchForUpdates: true` for automatic DB refresh
 
 ### Startup Order
 
-The enrichment pipeline must initialize before receiving messages:
+Enrichment MUST initialize before UDP receiver accepts traffic. See the **node** skill for async initialization patterns.
 
 ```javascript
-// src/app.js:136-139
+// src/app.js:192-218
 async function start() {
-  await enrichmentPipeline.initialize();  // Load MaxMind first
-  // ... then start HTTP and syslog receivers
+  await enrichmentPipeline.initialize(); // 1. Load MaxMind DB
+  server.listen(httpPort, httpBindAddress); // 2. HTTP server
+  setupWebSocketServer(server, sessionParser); // 3. WebSocket
+  await receiver.listen(); // 4. Syslog receiver LAST
 }
 ```
 
-This ensures no messages are processed without geo data available.
+**Why this order:** If the receiver starts before MaxMind loads, `get()` throws. Events would emit with `geo: null` for the first burst, showing arcs without origin data.
 
-### Shutdown
-
-Stop metrics logging on graceful shutdown:
+### Graceful Shutdown
 
 ```javascript
-// src/app.js:189
-enrichmentPipeline.shutdown();  // Calls geoLocator.stopMetricsLogging()
+enrichmentPipeline.shutdown(); // Stops 30s metrics interval, prevents timer leak
 ```
+
+Calls `stopMetricsLogging()` which clears the `setInterval` handle. Without this, the Node.js process hangs on exit.

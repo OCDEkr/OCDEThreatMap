@@ -2,61 +2,108 @@
 
 ## Contents
 - Service Architecture
+- Middleware Stack
+- Helmet CSP Configuration
 - Event Bus Integration
-- Service Patterns
-- Initialization Pattern
+- Startup and Shutdown
 - Anti-Patterns
 
 ## Service Architecture
 
-This codebase uses an **event-driven service layer** rather than traditional request-response services. Services communicate through the central EventEmitter in `src/events/event-bus.js`.
+No traditional service layer. This codebase uses an **event-driven pipeline** where services communicate through a central EventEmitter, not request-response calls.
 
 ```
-Route Handler → Event Bus → Service → Event Bus → WebSocket Broadcast
+UDP Receiver → Event Bus (message) → Parser → Event Bus (parsed) → Enrichment → Event Bus (enriched) → WebSocket Broadcast
 ```
+
+Express routes exist only for auth, settings, and static files — they do NOT interact with the event pipeline. See the **node** skill for EventEmitter patterns.
+
+## Middleware Stack
+
+Applied in `src/app.js` in this exact order:
+
+```javascript
+// 1. Security headers (MUST be first)
+app.use(helmet({ contentSecurityPolicy: { directives: { /* ... */ } } }));
+
+// 2. Body parsing
+app.use(bodyParser.json());
+
+// 3. Session (after body parsing, before routes)
+app.use(sessionParser);
+
+// 4. General API rate limiting
+app.use('/api', apiLimiter);
+
+// 5. Static file serving
+app.use(express.static('public'));
+
+// 6. Route mounts with per-route middleware
+app.use('/login', loginLimiter, loginRouter);
+app.use('/api/change-password', passwordChangeLimiter, requireAuth, changePasswordRouter);
+```
+
+### WARNING: Middleware Order Violations
+
+```javascript
+// BAD — session after routes means req.session is undefined in handlers
+app.use('/login', loginRouter);
+app.use(sessionParser);
+
+// BAD — static after routes means route handlers run for static file requests
+app.use('/api', apiRouter);
+app.use(express.static('public'));
+```
+
+## Helmet CSP Configuration
+
+Custom Content Security Policy in `src/app.js:46-61` allows CDN-loaded Globe.GL, Three.js, and D3:
+
+```javascript
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "unpkg.com", "cdn.jsdelivr.net"],
+      scriptSrcAttr: ["'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:", "unpkg.com", "raw.githubusercontent.com"],
+      connectSrc: ["'self'", "ws:", "wss:", "raw.githubusercontent.com", "cdn.jsdelivr.net", "unpkg.com"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false
+}));
+```
+
+**When adding a new CDN dependency:**
+1. Add the domain to `scriptSrc` for JS files
+2. Add to `connectSrc` if fetching data at runtime (TopoJSON, GeoJSON)
+3. Add to `imgSrc` if loading images
+4. `crossOriginEmbedderPolicy: false` is required for external resources
+
+### WARNING: CSP Blocks New CDN Resources
+
+**When You'll Hit This:** Adding a new visualization library from a CDN. The browser console shows `Refused to load the script` errors.
+
+**The Fix:** Add the CDN domain to the relevant CSP directive. NEVER set `contentSecurityPolicy: false` — it disables all CSP protection.
 
 ## Event Bus Integration
 
-The event bus is a singleton EventEmitter:
-
-```javascript
-// src/events/event-bus.js
-const { EventEmitter } = require('events');
-const eventBus = new EventEmitter();
-module.exports = eventBus;
-```
-
-Services listen for events and emit results:
-
-```javascript
-// Service listening pattern
-const eventBus = require('./events/event-bus');
-
-eventBus.on('parsed', (event) => {
-  const enriched = this.enrich(event);
-  eventBus.emit('enriched', enriched);
-});
-```
-
-## Service Patterns
-
-### Enrichment Pipeline Pattern
+The event bus is a singleton in `src/events/event-bus.js`. Services subscribe in their constructors or `initialize()` methods:
 
 ```javascript
 // src/enrichment/enrichment-pipeline.js
-class EnrichmentPipeline extends EventEmitter {
+class EnrichmentPipeline {
   constructor(eventBus) {
-    super();
     this.eventBus = eventBus;
-    this.geoLocator = new CachedGeoLocator();
   }
 
   async initialize() {
     await this.geoLocator.initialize();
-    
-    this.eventBus.on('parsed', (event) => {
-      this.enrich(event);
-    });
+    this.eventBus.on('parsed', (event) => this.enrich(event));
   }
 
   enrich(event) {
@@ -66,41 +113,31 @@ class EnrichmentPipeline extends EventEmitter {
 }
 ```
 
-### Wiring Services in app.js
+## Startup and Shutdown
 
-```javascript
-// Create service instances
-const enrichmentPipeline = new EnrichmentPipeline(eventBus);
+### Async Startup Sequence
 
-async function start() {
-  // Initialize services before server starts
-  await enrichmentPipeline.initialize();
-  
-  server.listen(3000);
-}
-```
-
-## Initialization Pattern
-
-Services requiring async setup use an `initialize()` method called at startup:
+Services must initialize before the HTTP server starts accepting connections:
 
 ```javascript
 async function start() {
   try {
-    // 1. Initialize services first
+    // 1. Initialize services (MaxMind DB, etc.)
     await enrichmentPipeline.initialize();
-    
+
     // 2. Start HTTP server
-    server.listen(3000, () => {
-      console.log('HTTP server listening on port 3000');
+    server.listen(httpPort, httpBindAddress, () => {
+      console.log(`HTTP server listening on ${httpBindAddress}:${httpPort}`);
     });
-    
-    // 3. Setup WebSocket (depends on server)
+
+    // 3. Setup WebSocket (depends on HTTP server)
     const wss = setupWebSocketServer(server, sessionParser);
-    
-    // 4. Wire event broadcast
+
+    // 4. Wire event broadcast (depends on WSS)
     wireEventBroadcast(wss);
-    
+
+    // 5. Start UDP receiver (last — begins accepting traffic)
+    await receiver.listen();
   } catch (err) {
     console.error('Failed to start:', err);
     process.exit(1);
@@ -108,13 +145,13 @@ async function start() {
 }
 ```
 
-## Graceful Shutdown
-
-Services implement `shutdown()` for cleanup:
+### Graceful Shutdown
 
 ```javascript
 process.on('SIGINT', () => {
-  server.close();
+  console.log(`Final: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}`);
+  server.close(() => console.log('HTTP server closed'));
+  receiver.stop();
   enrichmentPipeline.shutdown();
   process.exit(0);
 });
@@ -125,60 +162,47 @@ process.on('SIGINT', () => {
 **The Problem:**
 
 ```javascript
-// BAD - blocking initialization
+// BAD — server accepts requests before MaxMind DB is loaded
 const geoLocator = new GeoLocator();
-geoLocator.initializeSync(); // Blocks event loop
-
-app.listen(3000); // Server starts before services ready
+geoLocator.initializeSync();
+app.listen(3000);
 ```
 
 **Why This Breaks:**
-1. Blocks event loop during database load
-2. Server may accept requests before services ready
-3. Race conditions with early requests
+1. Blocks event loop during multi-MB database load
+2. Server may accept requests before geo lookups work
+3. WebSocket clients connect before enrichment pipeline is ready
 
-**The Fix:**
-
-```javascript
-// GOOD - async initialization before server start
-async function start() {
-  await geoLocator.initialize();  // Complete before continuing
-  server.listen(3000);            // Now safe
-}
-```
+**The Fix:** Use the async `start()` pattern — `await initialize()` before `server.listen()`.
 
 ## WARNING: Direct Service Coupling
 
 **The Problem:**
 
 ```javascript
-// BAD - tight coupling between services
+// BAD — enrichment directly calls broadcaster
 class EnrichmentPipeline {
   constructor() {
-    this.broadcaster = new AttackBroadcaster(); // Direct dependency
+    this.broadcaster = new AttackBroadcaster();
   }
 }
 ```
 
 **Why This Breaks:**
 1. Cannot test enrichment without broadcaster
-2. Cannot swap implementations
-3. Circular dependency risk
+2. Circular dependency risk
+3. Cannot add new consumers without modifying enrichment
 
-**The Fix:**
+**The Fix:** Loose coupling via event bus — enrichment emits `enriched`, broadcaster listens independently. See the **node** skill for EventEmitter patterns.
+
+## Settings as In-Memory State
+
+`src/routes/settings.js` exports both a router and a `getSettings()` function consumed by `src/app.js`:
 
 ```javascript
-// GOOD - loose coupling via event bus
-class EnrichmentPipeline {
-  constructor(eventBus) {
-    this.eventBus = eventBus;
-  }
-  
-  enrich(event) {
-    // Emit event - broadcaster listens separately
-    this.eventBus.emit('enriched', enrichedEvent);
-  }
-}
+const { getSettings } = require('./routes/settings');
+const networkSettings = getSettings();
+const httpPort = parseInt(process.env.HTTP_PORT || networkSettings.httpPort || '3000', 10);
 ```
 
-See the **node** skill for EventEmitter patterns.
+Settings persist only until server restart. Environment variables always override in-memory settings.

@@ -1,254 +1,237 @@
 # Patterns Reference
 
 ## Contents
-- DO/DON'T Design Patterns
-- Common Anti-Patterns
-- Browser IIFE Pattern
-- Dynamic Panel Creation
+- Styling Architecture
+- DO/DON'T Pairs
+- Anti-Patterns
+- Dynamic Panel Creation Pattern
+- Color Consistency Rules
+- NOC Display Considerations
+- New Feature Workflow
 
-## DO/DON'T Design Patterns
+## Styling Architecture
 
-### Color Application
+This project uses **three styling approaches** that MUST NOT be mixed within a single file:
 
-```css
-/* DO - Match border and text color */
-.panel-success {
-  border: 2px solid #00ff00;
-  color: #00ff00;
-  box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
-}
+| Approach | Where Used | Files |
+|----------|-----------|-------|
+| External CSS | Dashboard overlay layout | `public/css/dashboard.css` |
+| Inline `<style>` | Login, Admin pages | `public/login.html`, `public/admin.html` |
+| JS inline styles | Dynamically created panels | `public/js/stats-display.js`, `public/js/top-stats.js` |
 
-/* DON'T - Mix incompatible colors */
-.panel-confused {
-  border: 2px solid #00ff00;
-  color: #ff8c00;  /* Clashing with border */
-  box-shadow: 0 0 20px rgba(255, 0, 0, 0.3);  /* Third color! */
-}
-```
+**Why three approaches:** Dashboard panels created by JS need inline styles because they don't exist in the DOM at page load. The admin and login pages are self-contained HTML files that don't load `dashboard.css`. The dashboard CSS file handles only the persistent overlay elements.
 
-### Transparency Usage
+## DO/DON'T Pairs
+
+### Panel Backgrounds
 
 ```css
-/* DO - Consistent overlay opacity */
-.overlay-panel {
-  background: rgba(0, 0, 0, 0.8);  /* 80% standard */
-}
+/* DO - semi-transparent black over globe */
+background: rgba(0, 0, 0, 0.8);
 
-.overlay-panel-dark {
-  background: rgba(0, 0, 0, 0.9);  /* 90% for text-heavy areas */
-}
-
-/* DON'T - Inconsistent opacity values */
-.panel-1 { background: rgba(0, 0, 0, 0.75); }
-.panel-2 { background: rgba(0, 0, 0, 0.82); }
-.panel-3 { background: rgba(0, 0, 0, 0.78); }
+/* DON'T - opaque gray kills the immersive feel */
+background: #1a1a1a;
+background: #222222;
+background: rgb(30, 30, 30);
 ```
 
-### Font Sizing
+**Why:** The globe/map must remain partially visible through panels. Opaque backgrounds create dead zones that break the heads-up display aesthetic.
+
+### Border Width
 
 ```css
-/* DO - Use the established scale */
-.metric-large  { font-size: 28px; }  /* Primary metrics */
-.metric-medium { font-size: 18px; }  /* Secondary metrics */
-.metric-small  { font-size: 12px; }  /* Log entries */
+/* DO - 2px borders for visibility at distance */
+border: 2px solid #00d9ff;
 
-/* DON'T - Arbitrary sizes */
-.metric-random { font-size: 23px; }  /* Not in scale */
+/* DON'T - thin borders disappear on NOC displays */
+border: 1px solid #00d9ff;
+border: none;
 ```
 
-## WARNING: Common Anti-Patterns
+**Why:** NOC operators view from 20+ feet. 1px borders are invisible at that distance. Every panel needs a visible 2px border.
 
-### Anti-Pattern: Sans-Serif Fonts
+### Glow Color Matching
+
+```css
+/* DO - glow matches the element's border/text color */
+border: 2px solid #00ff00;
+box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+
+/* DON'T - mismatched glow creates visual noise */
+border: 2px solid #00ff00;
+box-shadow: 0 0 20px rgba(0, 217, 255, 0.3);
+```
+
+**Why:** Mismatched glows look like rendering artifacts. The glow should feel like light bleeding from the border, not a separate effect.
+
+### Font Declaration
+
+```css
+/* DO - always include monospace fallback */
+font-family: 'Courier New', monospace;
+
+/* DON'T - any of these break the terminal aesthetic */
+font-family: Arial, sans-serif;
+font-family: 'Courier New';  /* Missing fallback */
+font-family: 'Inter', sans-serif;
+```
+
+### Text Colors
+
+```css
+/* DO - use semantic green/cyan roles */
+color: #00ff00;  /* Data values */
+color: #00d9ff;  /* Headers, chrome */
+
+/* DON'T - use white text */
+color: #ffffff;
+color: white;
+color: #ccc;
+```
+
+**Why:** White text breaks the terminal color scheme. Every text element has a semantic color: green for data, cyan for structure, orange for warnings, red for errors.
+
+### Button Sizing
+
+```css
+/* DO - consistent 50x50 icon buttons */
+width: 50px;
+height: 50px;
+
+/* DON'T - varied button sizes break the toolbar */
+width: auto;
+padding: 10px 20px;
+```
+
+**Why:** The control toolbar at top:158px is a horizontal row of identically-sized squares. Mixed sizes break the visual rhythm.
+
+## Anti-Patterns
+
+### WARNING: White or Light Backgrounds
 
 **The Problem:**
 
 ```css
-/* BAD - Breaks terminal aesthetic */
-body {
-  font-family: 'Segoe UI', Tahoma, sans-serif;
-}
+/* BAD - destroys NOC readability */
+.panel { background: white; color: #333; }
+.panel { background: #f5f5f5; }
 ```
 
 **Why This Breaks:**
-1. Destroys NOC/terminal visual identity
-2. Inconsistent with all other dashboard elements
-3. Sans-serif reads worse at distance on dark backgrounds
+1. White panels create painful glare on NOC wall displays in dimmed rooms
+2. Destroys contrast with the black globe background
+3. Makes colored arcs invisible when they pass behind panels
+4. Operators get eye strain watching white panels for 8+ hour shifts
 
 **The Fix:**
 
 ```css
-/* GOOD - Consistent monospace */
-body {
-  font-family: 'Courier New', monospace;
-}
+.panel { background: rgba(0, 0, 0, 0.8); color: #00ff00; }
 ```
 
-### Anti-Pattern: Inline CSS Without Pattern
+### WARNING: CSS Frameworks or Preprocessors
 
-**The Problem:**
-
-```javascript
-// BAD - Inconsistent styling, hard to maintain
-element.style.cssText = `
-  background: rgba(0, 0, 0, 0.75);  /* Different opacity */
-  color: #00ee00;                    /* Different green */
-  border: 1px solid #00ff00;         /* Different border width */
-`;
-```
+**The Problem:** Adding Tailwind, Bootstrap, or Sass.
 
 **Why This Breaks:**
-1. Creates visual inconsistencies
-2. Duplicates values that should be centralized
-3. Makes theme updates impossible
+1. The project serves CSS directly via Express static files -- no build pipeline exists
+2. Framework utility classes conflict with the established inline style patterns in JS
+3. Framework color systems override the carefully tuned NOC palette
+4. Adds unnecessary weight to a performance-sensitive real-time dashboard
 
-**The Fix:**
+**The Fix:** Use vanilla CSS in `dashboard.css` or inline styles in JS panel creators.
 
-```javascript
-// GOOD - Use established patterns
-element.style.cssText = `
-  background: rgba(0, 0, 0, 0.8);   /* Standard overlay */
-  color: #00ff00;                    /* Standard green */
-  border: 2px solid #00ff00;         /* Standard border */
-`;
-```
-
-### Anti-Pattern: Z-Index Wars
-
-**The Problem:**
+### WARNING: Dynamic Font Size with Viewport Units
 
 ```css
-/* BAD - Escalating z-index values */
-.modal { z-index: 9999; }
-.tooltip { z-index: 99999; }
-.header { z-index: 999999; }
+/* BAD - unpredictable on NOC displays */
+font-size: 2vw;
+font-size: clamp(14px, 1.5vw, 28px);
 ```
 
-**Why This Breaks:**
-1. Impossible to maintain ordering
-2. New elements can't fit in the stack
-3. Indicates layout architecture problems
+**Why This Breaks:** NOC displays range from 1080p to 4K. Viewport units create wildly different sizes. The project uses fixed pixel values with media query breakpoints at 1920px and 3840px for predictable scaling.
 
-**The Fix:**
+### WARNING: Unsynchronized Country Color Maps
 
-```css
-/* GOOD - Defined layer system */
-:root {
-  --z-background: 1;
-  --z-ui: 10;
-  --z-header: 15;
-  --z-modal: 20;
-}
+The `COUNTRY_COLORS` object exists in BOTH `public/js/custom-arcs.js` (Three.js hex integers) and `public/js/flat-map-d3.js` (CSS hex strings). Adding a country to one file without the other creates inconsistent colors between globe and flat map views.
 
-.modal { z-index: var(--z-modal); }
-```
+**The Fix:** When adding/changing country colors, update both files. Search for `COUNTRY_COLORS` to find both maps.
 
-## Browser IIFE Pattern
+## Dynamic Panel Creation Pattern
 
-### Standard Module Structure
+JS-created panels follow this template from `stats-display.js` and `top-stats.js`:
 
 ```javascript
-/**
- * Module description
- * Pattern: IIFE exposing window.functionName
- */
 (function() {
   'use strict';
-  
-  // Private state
-  let privateVar = null;
-  
-  // Private functions
-  function privateHelper() { /* ... */ }
-  
-  // Public API - expose to window
-  window.publicFunction = function(arg) {
-    // Use private state and helpers
-    return privateHelper(arg);
+
+  let panel = null;
+
+  window.createMyPanel = function() {
+    if (panel) return panel;                    // Prevent duplicates
+
+    panel = document.createElement('div');
+    panel.id = 'my-panel';
+    panel.style.cssText = `
+      position: absolute;
+      /* ... all styles inline ... */
+    `;
+
+    panel.innerHTML = `/* ... template ... */`;
+    document.body.appendChild(panel);
+    return panel;
   };
-  
-  window.anotherPublic = function() { /* ... */ };
-  
-  console.log('Module initialized');
+
+  window.updateMyPanel = function(data) {
+    if (!panel) return;                         // Guard against missing panel
+    // Update DOM elements
+  };
+
+  window.removeMyPanel = function() {
+    if (panel) { panel.remove(); panel = null; }
+  };
 })();
 ```
 
-### Module Initialization Check
+Key rules:
+1. IIFE wrapper for encapsulation
+2. Singleton guard (check if panel already exists)
+3. All styles inline (no CSS class dependency)
+4. Expose create/update/remove to `window`
+5. Null check before updates
 
-```javascript
-// Prevent duplicate initialization
-window.createStatsPanel = function() {
-  if (statsPanel) {
-    console.warn('Stats panel already exists');
-    return statsPanel;  // Return existing instance
-  }
-  
-  // Create new panel
-  statsPanel = document.createElement('div');
-  // ...
-  return statsPanel;
-};
-```
+## NOC Display Considerations
 
-## Dynamic Panel Creation
+1. **Minimum font size: 16px** -- anything smaller is unreadable at 20+ feet
+2. **No tooltips** -- mouse interaction is rare on wall displays
+3. **No scrolling required** -- panels cap at 25vh to show content without scrolling
+4. **High contrast always** -- minimum contrast ratio is not WCAG-based but "visible from across the room"
+5. **No hover-dependent information** -- critical data must be visible without interaction
+6. **Auto-updating displays** -- data refreshes via WebSocket, no manual refresh needed
 
-### Creating Panels in JavaScript
+## New Feature Workflow
 
-```javascript
-// Standard panel creation pattern
-function createPanel(config) {
-  const panel = document.createElement('div');
-  panel.id = config.id;
-  panel.style.cssText = `
-    position: absolute;
-    ${config.position};
-    background: rgba(0, 0, 0, 0.8);
-    color: ${config.color};
-    font-family: 'Courier New', monospace;
-    border: 2px solid ${config.color};
-    padding: ${config.padding || '10px 12px'};
-    min-width: ${config.minWidth || '180px'};
-    z-index: 10;
-    box-shadow: 0 0 20px ${config.glowColor};
-  `;
-  
-  panel.innerHTML = config.content;
-  document.body.appendChild(panel);
-  return panel;
-}
+Copy this checklist when adding a new UI feature:
 
-// Usage
-createPanel({
-  id: 'my-panel',
-  position: 'bottom: 20px; right: 20px;',
-  color: '#00ff00',
-  glowColor: 'rgba(0, 255, 0, 0.3)',
-  content: '<div>Content</div>'
-});
-```
+1. Design
+- [ ] Determine which corner/zone the element belongs in (see layouts.md)
+- [ ] Choose border color by semantic role (green=data, cyan=chrome, orange=filtered)
+- [ ] Will it be CSS-positioned or JS-created? (static = CSS, dynamic = JS)
 
-### Cleanup Pattern
+2. Implement
+- [ ] Use the panel/button template from this file
+- [ ] Match existing glow intensity (0.3 rest, 0.6 hover)
+- [ ] Add responsive rules at 1920px and 3840px breakpoints
+- [ ] Test with globe view AND flat map view active
 
-```javascript
-window.removePanel = function(panelRef) {
-  if (panelRef) {
-    panelRef.remove();
-    panelRef = null;
-    console.log('Panel removed');
-  }
-};
-```
+3. Validate
+- [ ] Start test traffic: `node test/send-random-attacks.js`
+- [ ] Verify no overlap with existing panels
+- [ ] Check element doesn't block globe interaction (drag, zoom)
+- [ ] If panel scrolls, verify max-height caps at 25vh
+- [ ] Verify colors match the rest of the design system
 
-## Workflow Checklist: New Panel
-
-Copy this checklist when adding a new dashboard panel:
-
-- [ ] Choose color from threat palette or cyan accent
-- [ ] Use `rgba(0, 0, 0, 0.8)` background
-- [ ] Use `'Courier New', monospace` font
-- [ ] Add 2px solid border matching text color
-- [ ] Add matching box-shadow glow
-- [ ] Set z-index: 10
-- [ ] Position with absolute + bottom/right or top/left
-- [ ] Add to module with IIFE pattern
-- [ ] Include initialization guard (prevent duplicates)
-- [ ] Add cleanup/remove function
+4. Performance
+- [ ] If JS-created: add singleton guard and cleanup function
+- [ ] If animated: use requestAnimationFrame, not setInterval
+- [ ] If updating frequently: batch DOM writes

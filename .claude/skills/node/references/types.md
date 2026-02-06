@@ -1,41 +1,40 @@
 # Node.js Types Reference
 
 ## Contents
-- Type Conventions
-- JSDoc Patterns
-- Common Structures
+- JSDoc Conventions
+- Event Payloads
+- Configuration Objects
 - Validation Patterns
+- Anti-Patterns
 
-## Type Conventions
+## JSDoc Conventions
 
-This codebase uses JSDoc for type documentation (no TypeScript):
+Plain JavaScript with JSDoc for type documentation. NEVER add TypeScript files or `@ts-check`.
 
 ```javascript
 /**
- * Create a new SyslogReceiver instance
- * @param {Object} options - Configuration options
- * @param {number} options.port - UDP port to listen on (default: 514)
- * @param {string} options.address - IP address to bind to (default: '0.0.0.0')
+ * @param {Object} options
+ * @param {number} options.port - UDP port (default: 514)
+ * @param {string} options.address - Bind address (default: '127.0.0.1')
  */
 constructor(options = {}) {
   this.port = options.port || 514;
-  this.address = options.address || '0.0.0.0';
+  this.address = options.address || '127.0.0.1';
 }
 ```
 
-## Common Structures
+## Event Payloads
 
-### Event Payloads
+Four event types flow through the pipeline. Each payload is a plain object — no classes, no prototypes.
 
-**Message event (from UDP receiver):**
+### message Event (UDP Receiver to Event Bus)
 
 ```javascript
-/**
- * @typedef {Object} MessageEvent
- * @property {string} raw - Raw syslog message string
- * @property {string} remoteAddress - Sender IP address
+/** @typedef {Object} MessageEvent
+ * @property {string} raw - Raw syslog message (UTF-8 decoded)
+ * @property {string} remoteAddress - Sender IP
  * @property {number} remotePort - Sender port
- * @property {string} timestamp - ISO 8601 timestamp
+ * @property {string} timestamp - ISO 8601 string
  */
 const messageData = {
   raw: msg.toString('utf8'),
@@ -45,129 +44,163 @@ const messageData = {
 };
 ```
 
-**Parsed event:**
+### parsed Event (Parser to Event Bus)
+
+See the **syslog-parser** skill for field extraction details.
 
 ```javascript
-/**
- * @typedef {Object} ParsedEvent
+/** @typedef {Object} ParsedEvent
  * @property {string} timestamp - Event timestamp
  * @property {string|null} sourceIP - Attack source IP
  * @property {string|null} destinationIP - Target IP
  * @property {string} threatType - malware|intrusion|ddos|unknown
  * @property {string} action - deny|allow|drop|block
- * @property {string} raw - Original message
+ * @property {string} raw - Original syslog message
  */
 ```
 
-**Enriched event:**
+### enriched Event (Enrichment to Event Bus)
+
+See the **maxmind** skill for geo data structure.
 
 ```javascript
-/**
- * @typedef {Object} EnrichedEvent
+/** @typedef {Object} EnrichedEvent
  * @property {string} timestamp
  * @property {string|null} sourceIP
  * @property {string|null} destinationIP
  * @property {string} threatType
  * @property {string} action
  * @property {GeoData|null} geo - Geolocation data
- * @property {boolean} isOCDETarget - Targets OCDE infrastructure
+ * @property {boolean} isOCDETarget - Destination in OCDE IP ranges
  * @property {number} enrichmentTime - Processing time in ms
+ * @property {string} [enrichmentError] - Present only on failure
  */
 ```
 
-### Configuration Objects
-
-**LRU Cache options:**
+### parse-error Event (Parser to Event Bus)
 
 ```javascript
-/**
- * @typedef {Object} CacheOptions
- * @property {number} max - Maximum items (10000)
- * @property {number} ttl - Time-to-live in ms (3600000 = 1 hour)
+/** @typedef {Object} ParseErrorEvent
+ * @property {string} error - Error message
+ * @property {string} rawMessage - Original message that failed
+ * @property {Date} timestamp - When the error occurred
+ */
+```
+
+## Configuration Objects
+
+### LRU Cache Options
+
+See the **lru-cache** skill for tuning guidance.
+
+```javascript
+/** @typedef {Object} CacheOptions
+ * @property {number} max - Maximum cached IPs (10000)
+ * @property {number} ttl - TTL in ms (3600000 = 1 hour)
  * @property {boolean} updateAgeOnGet - Reset TTL on access (false)
  */
-this.cache = new LRUCache({
-  max: 10000,
-  ttl: 1000 * 60 * 60,
-  updateAgeOnGet: false
-});
+this.cache = new LRUCache({ max: 10000, ttl: 3600000, updateAgeOnGet: false });
+```
+
+### UDP Socket Options
+
+```javascript
+const socketOptions = {
+  type: 'udp4',
+  reuseAddr: true,
+  recvBufferSize: 33554432  // 32MB — handles burst traffic without drops
+};
+```
+
+### Environment Variable Parsing
+
+```javascript
+const HTTP_PORT = parseInt(process.env.HTTP_PORT || '3000', 10);
+const HTTP_BIND = process.env.HTTP_BIND_ADDRESS || '127.0.0.1';
+const SYSLOG_PORT = parseInt(process.env.SYSLOG_PORT || '514', 10);
+const isProduction = process.env.NODE_ENV === 'production';
 ```
 
 ## Validation Patterns
 
-### IPv4 Validation
-
-```javascript
-/**
- * Validate IPv4 address format
- * @param {string} ip - IP address string
- * @returns {boolean} - True if valid IPv4
- */
-validateIPv4(ip) {
-  const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  return ipv4Regex.test(ip);
-}
-```
-
-### Safe Type Coercion
-
-```javascript
-// BAD - parseInt without radix
-const port = parseInt(process.env.SYSLOG_PORT);
-
-// GOOD - Always specify radix
-const port = parseInt(process.env.SYSLOG_PORT || '514', 10);
-```
-
 ### Null-Safe Property Access
 
+MaxMind lookups return deeply nested objects. Always use optional chaining:
+
 ```javascript
-// GOOD - Optional chaining for deep properties
+// GOOD — handles missing nested properties
 return {
   latitude: result?.location?.latitude || null,
   longitude: result?.location?.longitude || null,
   city: result?.city?.names?.en || null,
-  country: result?.country?.iso_code || null
+  country: result?.country?.iso_code || null,
+  countryName: result?.country?.names?.en || null
 };
 ```
 
-## Return Type Consistency
+### Guard Clauses for Function Inputs
+
+```javascript
+// src/utils/ip-matcher.js
+function isOCDETarget(ip, ranges) {
+  if (!ip || !ranges || ranges.length === 0) return false;
+  return ipRangeCheck(ip, ranges);
+}
+```
+
+### Boolean Naming Convention
+
+Use `is`/`has`/`should` prefixes consistently:
+
+```javascript
+ws.isAlive = true;
+ws.isAuthenticated = !!session;
+const isOCDETarget = ipMatcher.isOCDETarget(event.destinationIP, ranges);
+const isProduction = process.env.NODE_ENV === 'production';
+```
+
+## Anti-Patterns
 
 ### WARNING: Inconsistent Return Types
 
 **The Problem:**
 
 ```javascript
-// BAD - Returns undefined implicitly
+// BAD — returns string or falls through to undefined
 extractSourceIP(parsed) {
   if (parsed.structuredData?.src) {
     return parsed.structuredData.src;
   }
-  // Falls through to undefined
+  // Implicit undefined return
 }
+```
+
+**Why This Breaks:**
+1. Callers must check for both null and undefined
+2. `undefined` becomes `"undefined"` in JSON payloads sent to dashboards
+3. Optional chaining does not help — `undefined?.foo` is still undefined
+
+**The Fix:**
+
+```javascript
+// GOOD — explicit null for "not found"
+extractSourceIP(parsed) {
+  return parsed.structuredData?.src || null;
+}
+```
+
+### WARNING: parseInt Without Radix
+
+**The Problem:**
+
+```javascript
+// BAD — parseInt('08') returns 0 in older engines (octal interpretation)
+const port = parseInt(process.env.SYSLOG_PORT);
 ```
 
 **The Fix:**
 
 ```javascript
-// GOOD - Explicit null for "not found"
-extractSourceIP(parsed) {
-  if (parsed.structuredData?.src) {
-    return this.validateIPv4(parsed.structuredData.src) 
-      ? parsed.structuredData.src 
-      : null;
-  }
-  return null;  // Explicit return
-}
-```
-
-## Boolean Naming
-
-Use `is`, `has`, `should` prefixes for boolean variables:
-
-```javascript
-ws.isAlive = true;
-const hadError = false;
-const isRotating = true;
-const isOCDETarget = isOCDETarget(event.destinationIP, ranges);
+// GOOD — always specify radix 10
+const port = parseInt(process.env.SYSLOG_PORT || '514', 10);
 ```

@@ -11,188 +11,141 @@
 
 ## Cache-Aside Pattern
 
-The standard pattern in this codebase. Check cache first, fetch on miss, store result.
+Check cache first, fetch on miss, store result. This is the only caching strategy in this project.
 
 ```javascript
 // From src/enrichment/cache.js:44-60
 get(ip) {
-  // Check if IP exists in cache (handles both hit and stale)
   if (this.cache.has(ip)) {
     this.metrics.hits++;
     return this.cache.get(ip);
   }
-
-  // Cache miss - lookup and cache result
   this.metrics.misses++;
   const geoData = this.geoLocator.get(ip);
-  
-  // Cache the result (even if null)
-  this.cache.set(ip, geoData);
+  this.cache.set(ip, geoData);  // Cache even null results
   return geoData;
 }
 ```
 
-**Why `has()` before `get()`:** The `get()` method returns `undefined` for both missing keys AND keys explicitly set to `undefined`. Using `has()` first distinguishes cache miss from cached null/undefined.
+**Why `has()` before `get()`:** In lru-cache v11, `get()` returns `undefined` for both missing and expired keys. `has()` is the only way to distinguish a miss from a cached null — critical for negative caching.
 
 ---
 
 ## Wrapper Class Pattern
 
-Encapsulate cache logic in a dedicated class that mirrors the underlying service interface.
-
 ```javascript
-// DO: Wrapper class with same interface
+// DO: Wrapper class with same interface as underlying service
 class CachedGeoLocator {
   constructor() {
     this.geoLocator = new GeoLocator();
-    this.cache = new LRUCache({ max: 10000, ttl: 3600000 });
-    this.metrics = { hits: 0, misses: 0 };
+    this.cache = new LRUCache({ max: 10000, ttl: 3600000, updateAgeOnGet: false });
+    this.metrics = { hits: 0, misses: 0, startTime: Date.now() };
   }
-  
-  async initialize() {
-    await this.geoLocator.initialize();
-  }
-  
+  async initialize() { await this.geoLocator.initialize(); }
   get(ip) { /* cache-aside logic */ }
-}
-
-// DON'T: Inline caching scattered throughout code
-const cache = new LRUCache({ max: 10000 });
-function enrichEvent(event) {
-  if (cache.has(event.ip)) { /* ... */ }  // Cache logic mixed with business logic
 }
 ```
 
-**Why this matters:** Centralized caching makes hit rate monitoring, cache tuning, and testing significantly easier. Scattered caching becomes unmaintainable.
+```javascript
+// DON'T: Inline caching scattered throughout business logic
+function enrichEvent(event) {
+  if (cache.has(event.ip)) { geo = cache.get(event.ip); }
+  else { geo = geoLocator.get(event.ip); cache.set(event.ip, geo); }
+  // Cache logic mixed with enrichment — impossible to instrument or test
+}
+```
+
+**Why:** Centralized caching makes hit rate monitoring, tuning, and testing trivial. Scattered cache reads/writes are unmaintainable. See the **maxmind** skill for the `GeoLocator` being wrapped.
 
 ---
 
 ## Negative Caching
 
-Cache failed lookups to prevent repeated expensive operations on invalid inputs.
-
 ```javascript
-// DO: Cache null results
+// DO: Cache null results — prevents repeated lookups of private/bogon IPs
 const geoData = this.geoLocator.get(ip);
-this.cache.set(ip, geoData);  // geoData may be null - that's intentional
-
-// DON'T: Only cache successful results
-const geoData = this.geoLocator.get(ip);
-if (geoData) {
-  this.cache.set(ip, geoData);  // Private IPs will be looked up every time
-}
+this.cache.set(ip, geoData);  // geoData may be null — intentional
 ```
 
-**Why this matters:** Invalid IPs (private ranges, bogon addresses) return null. Without negative caching, every request for `192.168.1.1` hits the MaxMind database unnecessarily.
+```javascript
+// DON'T: Only cache successful results
+if (geoData) { this.cache.set(ip, geoData); }
+// Private IPs (192.168.x.x, 10.x.x.x) hit MaxMind every time — destroys hit rate
+```
+
+**Why:** Firewall logs contain many private IPs that MaxMind cannot geolocate. Without negative caching, these trigger disk-backed MMDB lookups on every event, making the 80% hit rate target impossible.
 
 ---
 
 ## TTL Configuration
 
-### Fixed Expiration (This Codebase)
-
 ```javascript
-this.cache = new LRUCache({
-  max: 10000,
-  ttl: 1000 * 60 * 60,     // 1 hour
-  updateAgeOnGet: false,   // Entries expire at fixed time, not sliding window
-});
-```
-
-**Use fixed expiration when:** Data has a natural staleness threshold (geo data rarely changes, but should refresh periodically).
-
-### Sliding Window Expiration
-
-```javascript
+// Fixed expiration (this codebase) — entry expires 1 hour after insertion
 this.cache = new LRUCache({
   max: 10000,
   ttl: 1000 * 60 * 60,
-  updateAgeOnGet: true,    // Reset TTL on every access
+  updateAgeOnGet: false,
+});
+
+// Sliding window — TTL resets on every access
+// AVOID for geolocation: stale geo data for hot IPs persists indefinitely
+this.cache = new LRUCache({
+  max: 10000,
+  ttl: 1000 * 60 * 60,
+  updateAgeOnGet: true,   // WARNING: hot IPs never expire
 });
 ```
 
-**Use sliding window when:** You want to keep hot data indefinitely while evicting cold data.
+**Decision rule:** Use fixed (`false`) when data has a natural freshness window. Use sliding (`true`) only for session-like data.
 
 ---
 
-## WARNING: Common Anti-Patterns
+## WARNING: Anti-Patterns
 
 ### Using `get()` Alone for Cache Check
 
-**The Problem:**
-
 ```javascript
-// BAD - Cannot distinguish cache miss from cached null
+// BAD — Cannot distinguish cache miss from cached null
 const data = cache.get(key);
-if (!data) {
-  // Is this a miss or did we cache null?
-  data = fetchFromSource(key);
-  cache.set(key, data);
-}
+if (!data) { data = fetchFromSource(key); cache.set(key, data); }
 ```
 
-**Why This Breaks:**
-1. Null/undefined cached values trigger unnecessary fetches
-2. Negative caching becomes impossible
-3. Hit rate metrics become unreliable
-
-**The Fix:**
+**Why:** Null cached values trigger unnecessary fetches. Negative caching becomes impossible.
 
 ```javascript
-// GOOD - Explicit cache check
-if (cache.has(key)) {
-  return cache.get(key);  // May return null - that's fine
-}
+// GOOD — Explicit existence check
+if (cache.has(key)) { return cache.get(key); }
 ```
-
----
 
 ### No Cache Size Limit
 
-**The Problem:**
-
 ```javascript
-// BAD - Unbounded cache
+// BAD — Memory grows unbounded until OOM crash
 const cache = new LRUCache({ ttl: 3600000 });  // No max!
 ```
 
-**Why This Breaks:**
-Memory grows unbounded until process crashes. Under high-volume syslog ingestion, unique IPs accumulate rapidly.
-
-**The Fix:**
+**Why:** In lru-cache v11, omitting `max` without `maxSize` means no eviction. Unique IPs accumulate until Node.js OOMs.
 
 ```javascript
-// GOOD - Always set max
+// GOOD — Always set max
 const cache = new LRUCache({ max: 10000, ttl: 3600000 });
 ```
 
----
-
 ### Forgetting Async Initialization
 
-**The Problem:**
-
 ```javascript
-// BAD - Using cache before underlying service is ready
-class CachedService {
-  constructor() {
-    this.cache = new LRUCache({ max: 1000 });
-    this.service = new SlowService();  // Not initialized!
-  }
-  
-  get(key) {
-    if (!this.cache.has(key)) {
-      return this.service.fetch(key);  // Throws: service not ready
-    }
-  }
-}
+// BAD — Cache wrapper used before MaxMind DB loads
+const cached = new CachedGeoLocator();
+cached.get('8.8.8.8');  // Throws: MMDB reader is null
 ```
 
-**The Fix:**
+**Why:** Constructor creates cache synchronously but `GeoLocator` loads MMDB asynchronously.
 
 ```javascript
-// GOOD - Explicit async initialization
-async initialize() {
-  await this.service.initialize();
-  console.log('CachedService ready');
-}
+// GOOD — Always await initialize() before first get()
+const cached = new CachedGeoLocator();
+await cached.initialize();
+cached.get('8.8.8.8');  // Safe
+```
+
+See the **maxmind** skill for database initialization details.

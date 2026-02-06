@@ -2,25 +2,29 @@
 
 ## Contents
 - Architecture Decision
-- In-Memory State
+- In-Memory State Patterns
+- File Persistence
 - Dead Letter Queue
-- When to Add Persistence
+- Caching Layer
 - Anti-Patterns
 
 ## Architecture Decision
 
-**This codebase has NO database by design.** It's an in-memory real-time visualization system.
+**This codebase has NO database by design.** It is a real-time visualization system with no historical analysis requirement.
 
-| What | Storage | Rationale |
-|------|---------|-----------|
-| Attack events | In-memory only | Real-time display, no history needed |
-| Geo lookups | LRU cache | MaxMind file-based, cache for speed |
-| Sessions | In-memory (default) | Development simplicity |
-| Failed messages | File (JSONL) | Dead letter queue for debugging |
+| Data | Storage | Persistence | Rationale |
+|------|---------|-------------|-----------|
+| Attack events | In-memory (event bus) | None — fire and forget | Real-time display only |
+| Geo lookups | LRU cache (10K items) | None — repopulated on demand | See the **lru-cache** skill |
+| Sessions | MemoryStore (default) | None — lost on restart | Single-admin, dev simplicity |
+| Settings | In-memory object | None — lost on restart | Runtime config via API |
+| Password hash | File (`data/password.hash`) | Survives restart | bcrypt hash, `0o600` perms |
+| Failed messages | File (`logs/failed-messages.jsonl`) | Append-only log | DLQ for debugging |
+| Metrics | In-memory counters | None — logged on shutdown | Reported every 10s to console |
 
-## In-Memory State
+## In-Memory State Patterns
 
-Metrics tracked in `src/app.js`:
+### Metrics Counters (src/app.js)
 
 ```javascript
 let totalReceived = 0;
@@ -30,28 +34,84 @@ let totalFailed = 0;
 eventBus.on('message', () => totalReceived++);
 eventBus.on('parsed', () => totalParsed++);
 eventBus.on('parse-error', () => totalFailed++);
+
+// Periodic reporting
+setInterval(() => {
+  const successRate = totalReceived > 0 ? (totalParsed / totalReceived * 100).toFixed(2) : 0;
+  console.log(`METRICS: Received=${totalReceived}, Parsed=${totalParsed}, Failed=${totalFailed}, Rate=${successRate}%`);
+}, 10000);
 ```
+
+### Settings Object (src/routes/settings.js)
+
+```javascript
+const settings = {
+  heading: 'OCDE Threat Map',
+  httpBindAddress: '127.0.0.1',
+  syslogBindAddress: '127.0.0.1',
+  httpPort: 3000,
+  syslogPort: 514,
+};
+
+// Exported for startup config
+module.exports.getSettings = () => settings;
+```
+
+Settings validated against known keys to prevent injection:
+
+```javascript
+for (const [key, value] of Object.entries(updates)) {
+  if (settings.hasOwnProperty(key)) {
+    settings[key] = value;
+  }
+}
+```
+
+## File Persistence
+
+### Password Hash (src/routes/change-password.js)
+
+```javascript
+const PASSWORD_FILE = path.join(__dirname, '..', '..', 'data', 'password.hash');
+
+function savePasswordHash(hash) {
+  fs.writeFileSync(PASSWORD_FILE, hash, { mode: 0o600 });
+}
+
+function loadPasswordHash() {
+  if (fs.existsSync(PASSWORD_FILE)) {
+    passwordHash = fs.readFileSync(PASSWORD_FILE, 'utf8').trim();
+    return true;
+  }
+  return false;
+}
+```
+
+Password hash loaded on module load. Falls back to `DASHBOARD_PASSWORD` env var if no hash file exists.
+
+### Custom Logo (src/routes/logo.js)
+
+Multer saves to `public/uploads/`. Old logos with different extensions cleaned up on new upload.
 
 ## Dead Letter Queue
 
-Failed messages persist to `logs/failed-messages.jsonl`:
+Failed parse attempts persisted to `logs/failed-messages.jsonl` in `src/utils/error-handler.js`:
 
 ```javascript
-// src/utils/error-handler.js
 class DeadLetterQueue {
   add(rawMessage, error) {
     const entry = {
       timestamp: new Date().toISOString(),
-      error: error.message,
-      rawMessage: rawMessage.substring(0, 500),
+      error: error.message || 'Unknown error',
+      rawMessage: rawMessage.substring(0, 500),  // Truncate
       retryCount: 0
     };
-    
-    // In-memory for fast access
     this.failedMessages.push(entry);
-    
-    // Persist to file (JSONL format)
-    fs.appendFileSync(this.failedMessagesFile, JSON.stringify(entry) + '\n');
+    try {
+      fs.appendFileSync(this.failedMessagesFile, JSON.stringify(entry) + '\n');
+    } catch (writeErr) {
+      console.error('DLQ: Failed to write:', writeErr.message);
+    }
   }
 }
 ```
@@ -61,92 +121,57 @@ class DeadLetterQueue {
 ```javascript
 const dlq = new DeadLetterQueue();
 const failures = dlq.loadFromFile();
-
-// Analyze failure patterns
-const byError = failures.reduce((acc, f) => {
-  acc[f.error] = (acc[f.error] || 0) + 1;
-  return acc;
-}, {});
+console.log(`Total failures: ${failures.length}`);
 ```
 
-## Caching with LRU
+## Caching Layer
 
-Geo lookups use `lru-cache`. See the **lru-cache** skill for details.
+Geo lookups cached via `lru-cache` in `src/enrichment/cache.js`. See the **lru-cache** skill for configuration. See the **maxmind** skill for the underlying lookup.
 
-```javascript
-// src/enrichment/cache.js
-const { LRUCache } = require('lru-cache');
-
-const cache = new LRUCache({
-  max: 10000,          // Max entries
-  ttl: 1000 * 60 * 60  // 1 hour TTL
-});
-```
-
-## When to Add Persistence
-
-Consider adding a database if requirements change to include:
-- Historical attack analysis
-- Trend reporting over time
-- Multi-instance deployment (shared state)
-- User management beyond single admin
-
-**Recommended approach:** SQLite for simplicity, or Redis for multi-instance.
-
-## WARNING: Session Store in Production
+## WARNING: MemoryStore in Production
 
 **The Problem:**
 
 ```javascript
-// Current: in-memory session store (default)
+// Current default: no session store configured
 const sessionParser = session({
   secret: process.env.SESSION_SECRET,
-  // No store configured = MemoryStore
+  // No store = MemoryStore
 });
 ```
 
 **Why This Breaks in Production:**
-1. Sessions lost on server restart
-2. Memory leaks under heavy use (MemoryStore doesn't prune)
+1. Sessions lost on every server restart — admin must re-login
+2. MemoryStore leaks memory (no automatic pruning of expired sessions)
 3. Cannot scale to multiple instances
 
-**The Fix:**
-
-```javascript
-// Production: use connect-redis or similar
-const RedisStore = require('connect-redis').default;
-const redis = require('redis');
-
-const redisClient = redis.createClient();
-
-const sessionParser = session({
-  store: new RedisStore({ client: redisClient }),
-  secret: process.env.SESSION_SECRET,
-  // ...
-});
-```
+**Acceptable here because:** Single admin user, single instance, 24h session expiry. If requirements grow, add `connect-redis` or `connect-sqlite3`.
 
 See the **express-session** skill for session store options.
 
-## WARNING: Synchronous File I/O
+## WARNING: Synchronous File I/O in DLQ
 
 **The Problem:**
 
 ```javascript
-// BAD - blocks event loop
 fs.appendFileSync(this.failedMessagesFile, JSON.stringify(entry) + '\n');
 ```
 
-**Why This Is Accepted Here:**
-- DLQ writes are infrequent (only on parse failures)
-- Durability > performance for error logging
-- Ensures entry persists even on immediate crash
+**Why It's Accepted:** DLQ writes are infrequent (only parse failures), durability matters more than throughput, and sync ensures the entry persists even on immediate crash.
 
-**When to Change:**
-If parse failures become frequent (>100/sec), switch to async buffered writes:
+**When to Change:** If parse failures exceed ~100/sec, switch to async buffered writes:
 
 ```javascript
-// Async alternative for high-volume
 const writeStream = fs.createWriteStream(path, { flags: 'a' });
 writeStream.write(JSON.stringify(entry) + '\n');
 ```
+
+## When to Add a Database
+
+Consider adding persistence if requirements change to include:
+- Historical attack trend analysis
+- Multi-user management beyond single admin
+- Multi-instance deployment (shared state)
+- Audit trail or compliance logging
+
+**Recommended:** SQLite via `better-sqlite3` for simplicity, or Redis for multi-instance sessions + caching.

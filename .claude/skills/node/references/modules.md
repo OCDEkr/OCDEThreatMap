@@ -1,144 +1,121 @@
 # Node.js Modules Reference
 
 ## Contents
-- CommonJS Patterns
-- Module Organization
+- CommonJS Export Patterns
+- Import Order
 - Singleton Pattern
-- Export Conventions
+- Module-Level State
+- Circular Dependency Prevention
+- Async Module Initialization
+- Anti-Patterns
 
-## CommonJS Patterns
+## CommonJS Export Patterns
 
-This codebase uses CommonJS (not ES modules):
+Three export styles. NEVER mix styles within a module.
+
+### Named Class Export
+
+**When:** Stateful components that callers instantiate.
 
 ```javascript
-// Importing
+// src/receivers/udp-receiver.js
 const { EventEmitter } = require('events');
-const express = require('express');
+
+class SyslogReceiver extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    this.port = options.port || 514;
+  }
+}
+module.exports = { SyslogReceiver };
+
+// Usage
 const { SyslogReceiver } = require('./receivers/udp-receiver');
-
-// Exporting (class)
-class PaloAltoParser extends EventEmitter { }
-module.exports = { PaloAltoParser };
-
-// Exporting (singleton)
-const eventBus = new EventEmitter();
-module.exports = eventBus;
-
-// Exporting (functions)
-function broadcast(data) { }
-function wireEventBroadcast(wss) { }
-module.exports = { broadcast, wireEventBroadcast };
+const receiver = new SyslogReceiver({ port: 5514 });
 ```
 
-## Module Organization
+### Named Function Export
 
-**Directory structure:**
+**When:** Stateless utility functions.
 
-```
-src/
-├── app.js                    # Entry point - wires everything
-├── events/
-│   └── event-bus.js          # Singleton EventEmitter
-├── receivers/
-│   └── udp-receiver.js       # UDP socket handling
-├── parsers/
-│   └── palo-alto-parser.js   # Syslog parsing
-├── enrichment/
-│   ├── geolocation.js        # MaxMind wrapper
-│   ├── cache.js              # LRU cache wrapper
-│   └── enrichment-pipeline.js # Coordinates enrichment
-├── websocket/
-│   ├── ws-server.js          # WebSocket setup
-│   ├── broadcaster.js        # Event broadcast
-│   └── attack-broadcaster.js # Attack-specific formatting
-├── middleware/
-│   ├── session.js            # Express session config
-│   └── auth-check.js         # Route auth middleware
-├── routes/
-│   ├── login.js              # POST /login
-│   └── logout.js             # POST /logout
-└── utils/
-    ├── error-handler.js      # Dead letter queue
-    └── ip-matcher.js         # OCDE IP range matching
+```javascript
+// src/utils/security.js
+async function hashPassword(password) {
+  return bcrypt.hash(password, SALT_ROUNDS);
+}
+
+module.exports = { hashPassword, verifyPassword, safeCompare, logSecurityEvent };
 ```
 
-## Singleton Pattern
+### Direct Instance Export (Singleton)
 
-**When:** Shared state across modules (event bus, config)
+**When:** Exactly one instance needed across the entire process.
 
 ```javascript
 // src/events/event-bus.js
 const { EventEmitter } = require('events');
 const eventBus = new EventEmitter();
 eventBus.setMaxListeners(20);
-module.exports = eventBus;  // Export instance, not class
+module.exports = eventBus;  // Instance, not class
 
-// Usage in other modules
+// Every require() returns the SAME object
 const eventBus = require('./events/event-bus');
-eventBus.on('parsed', handler);  // Same instance everywhere
 ```
 
-### WARNING: Accidental Multiple Instances
+## Import Order
 
-**The Problem:**
-
-```javascript
-// BAD - Exports class, creates new instance each import
-module.exports = { EventBus: new EventEmitter() };
-
-// In another file - different instance!
-const { EventBus } = require('./event-bus');
-```
-
-**The Fix:**
+Enforced throughout `src/`:
 
 ```javascript
-// GOOD - Export the instance directly
-const eventBus = new EventEmitter();
-module.exports = eventBus;
+// 1. Node.js built-ins
+const http = require('http');
+const path = require('path');
+const dgram = require('dgram');
+const { EventEmitter } = require('events');
+
+// 2. External packages
+const express = require('express');
+const { WebSocketServer } = require('ws');
+const maxmind = require('maxmind');
+
+// 3. Local modules
+const eventBus = require('./events/event-bus');
+const { SyslogReceiver } = require('./receivers/udp-receiver');
+const { EnrichmentPipeline } = require('./enrichment/enrichment-pipeline');
 ```
 
 ## Module-Level State
 
-**When:** WebSocket server reference needed by multiple functions
+**When:** Functions share state that outlives any single call (WebSocket refs, batch buffers).
 
 ```javascript
-// src/websocket/broadcaster.js
-let wss = null;  // Module-level state
+// src/websocket/attack-broadcaster.js
+let eventBatch = [];
+let batchTimer = null;
+let wssRef = null;
+let totalBroadcast = 0;
 
-function broadcast(data) {
-  if (!wss) {
-    console.error('WebSocket server not initialized');
-    return;
-  }
-  // use wss...
+function broadcastAttack(wss, event) {
+  wssRef = wss;
+  eventBatch.push(formatEvent(event));
+  if (!batchTimer) batchTimer = setInterval(flushBatch, 100);
 }
 
-function wireEventBroadcast(webSocketServer) {
-  wss = webSocketServer;  // Set on initialization
-  eventBus.on('enriched', (event) => {
-    broadcastAttack(wss, event);
-  });
-}
-
-module.exports = { broadcast, wireEventBroadcast };
+module.exports = { broadcastAttack, getBatchStats, stopBatching };
 ```
+
+See the **websocket** skill for broadcast implementation details.
 
 ## Circular Dependency Prevention
 
-**Structure:** Entry point (app.js) wires dependencies, modules don't require each other cyclically.
+**Structure:** `app.js` is the sole wiring point. Modules communicate through the event bus, never by requiring each other.
 
-```javascript
-// app.js - Central wiring point
-const eventBus = require('./events/event-bus');
-const { SyslogReceiver } = require('./receivers/udp-receiver');
-const { PaloAltoParser } = require('./parsers/palo-alto-parser');
-const { EnrichmentPipeline } = require('./enrichment/enrichment-pipeline');
-
-// Wire components together
-receiver.on('message', (data) => eventBus.emit('message', data));
-// Parser internally listens to eventBus
-// EnrichmentPipeline internally listens to eventBus
+```
+app.js  -->requires-->  event-bus.js (singleton)
+app.js  -->requires-->  udp-receiver.js    --emits-->   event-bus
+app.js  -->requires-->  palo-alto-parser.js --listens--> event-bus
+app.js  -->requires-->  enrichment-pipeline.js --listens--> event-bus
+app.js  -->requires-->  broadcaster.js     --listens--> event-bus
 ```
 
 ### WARNING: Direct Cross-Module Dependencies
@@ -146,45 +123,91 @@ receiver.on('message', (data) => eventBus.emit('message', data));
 **The Problem:**
 
 ```javascript
-// BAD - parser.js requires broadcaster.js
-// broadcaster.js requires parser.js
-// = Circular dependency
+// BAD — parser requires broadcaster, broadcaster requires parser = CYCLE
+// parser.js
+const { broadcast } = require('./websocket/broadcaster');
+// broadcaster.js
+const { parse } = require('./parsers/palo-alto-parser');
 ```
+
+**Why This Breaks:**
+1. CommonJS resolves cycles by returning partially-loaded module — values are undefined
+2. Fails silently — no error, just "undefined is not a function" at runtime
+3. Breaks the event-driven decoupling guarantees
 
 **The Fix:**
 
 ```javascript
-// GOOD - Both require event-bus.js (no cycle)
-// Parser emits to eventBus
+// GOOD — Both communicate through event bus (no cycle)
+// parser.js
 eventBus.emit('parsed', event);
 
-// Broadcaster listens to eventBus
-eventBus.on('parsed', handleParsed);
+// broadcaster.js
+eventBus.on('enriched', (event) => broadcastAttack(wss, event));
 ```
 
 ## Async Module Initialization
 
-**Pattern:** Class with `initialize()` method for async setup
+**Pattern:** Constructor sets up state synchronously. `initialize()` handles async setup. Separates object creation from I/O.
 
 ```javascript
+// src/enrichment/enrichment-pipeline.js
 class EnrichmentPipeline extends EventEmitter {
   constructor(eventBus) {
     super();
     this.eventBus = eventBus;
-    this.geoLocator = new CachedGeoLocator();
+    this.geoLocator = new CachedGeoLocator();  // Sync
   }
 
   async initialize() {
-    await this.geoLocator.initialize();  // Load MaxMind DB
+    await this.geoLocator.initialize();  // Async — loads MaxMind DB
+    this.geoLocator.startMetricsLogging(30000);
     this.eventBus.on('parsed', (event) => this.enrich(event));
-    console.log('EnrichmentPipeline initialized');
   }
+
+  shutdown() {
+    this.geoLocator.stopMetricsLogging();
+  }
+}
+module.exports = { EnrichmentPipeline };
+```
+
+### WARNING: Forgetting to Await initialize()
+
+**The Problem:**
+
+```javascript
+// BAD — pipeline operates without loaded database
+const pipeline = new EnrichmentPipeline(eventBus);
+pipeline.initialize();  // Missing await! Returns unresolved Promise
+```
+
+**Why This Breaks:**
+1. `geoLocator.get()` throws "not initialized" or returns null for every IP
+2. All enriched events have `geo: null` — globe shows no arcs
+3. No error thrown — app appears to work but renders nothing
+
+**The Fix:** Always await in the `start()` function:
+
+```javascript
+async function start() {
+  await pipeline.initialize();  // Block until ready
 }
 ```
 
-**Usage:**
+## Directory Convention
 
-```javascript
-const pipeline = new EnrichmentPipeline(eventBus);
-await pipeline.initialize();  // Must await before use
 ```
+src/
+  app.js                     # Entry point — wires all modules
+  events/                    # Shared communication
+  receivers/                 # Input (UDP syslog)
+  parsers/                   # Data transformation
+  enrichment/                # Data augmentation
+  websocket/                 # Output (real-time broadcast)
+  middleware/                # Express middleware
+  routes/                    # HTTP route handlers
+  utils/                     # Stateless utilities
+```
+
+See the **express** skill for route and middleware organization.

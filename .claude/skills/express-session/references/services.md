@@ -1,159 +1,154 @@
 # Services Reference
 
 ## Contents
-- Session Parser as Shared Service
-- WebSocket Session Integration
-- Service Wiring Pattern
-- WARNING: Service Anti-Patterns
+- Password Service
+- Settings Service
+- Security Utilities
+- WebSocket Session Sharing
+- Anti-Patterns
 
-## Session Parser as Shared Service
+## Password Service
 
-The session parser is created once and shared across HTTP and WebSocket contexts.
+Password management in `src/routes/change-password.js` combines routing with service logic. It manages a dual-mode password system: initial plaintext from env var, then bcrypt-hashed after first change.
+
+### Password Lifecycle
 
 ```javascript
-// src/middleware/session.js - Single source of truth
-const session = require('express-session');
+// src/routes/change-password.js — state machine
+const PASSWORD_FILE = path.join(__dirname, '..', '..', 'data', 'password.hash');
+let passwordHash = null; // null = use env var, non-null = use bcrypt
 
-const sessionParser = session({
-  secret: process.env.SESSION_SECRET || 'ocde-threat-map-change-in-production',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure: false,
-    sameSite: 'strict',
-    maxAge: 24 * 60 * 60 * 1000
+// On module load, try to read persisted hash
+loadPasswordHash();
+
+// Verification dispatches based on state
+if (isPasswordHashed()) {
+  passwordValid = await verifyPassword(currentPassword, passwordHash);
+} else {
+  passwordValid = safeCompare(currentPassword, getCurrentPassword());
+}
+```
+
+### Password Change with Session Regeneration
+
+```javascript
+// After successful password change — prevent session fixation
+const newHash = await hashPassword(newPassword);
+savePasswordHash(newHash);  // Writes to data/password.hash with mode 0o600
+passwordHash = newHash;
+
+req.session.regenerate((err) => {
+  if (!err) {
+    req.session.userId = userId;
+    req.session.authenticated = true;
+    req.session.passwordChangedAt = Date.now();
   }
 });
-
-module.exports = { sessionParser };
 ```
 
-## WebSocket Session Integration
-
-Pass the same session parser to WebSocket authentication for unified session handling.
+### Exported Helper Functions
 
 ```javascript
-// src/app.js - Service wiring
-const { sessionParser } = require('./middleware/session');
-const { setupWebSocketServer } = require('./websocket/ws-server');
-
-// HTTP gets session middleware
-app.use(sessionParser);
-
-// WebSocket gets same session parser for upgrade auth
-const wss = setupWebSocketServer(server, sessionParser);
+// Used by login route to determine verification strategy
+module.exports.getCurrentPassword = getCurrentPassword;  // Returns env var or 'ChangeMe'
+module.exports.getPasswordHash = getPasswordHash;         // Returns bcrypt hash or null
+module.exports.isPasswordHashed = isPasswordHashed;       // Boolean: has password been changed?
 ```
 
-## Service Wiring Pattern
+## Settings Service
 
-The WebSocket server receives the session parser via dependency injection.
+In-memory key-value store in `src/routes/settings.js`. No persistence — resets on restart.
 
 ```javascript
-// src/websocket/ws-server.js
-function setupWebSocketServer(httpServer, sessionParser) {
-  const wss = new WebSocketServer({ noServer: true });
-  
-  httpServer.on('upgrade', (request, socket, head) => {
-    authenticateUpgrade(request, socket, sessionParser)
-      .then((session) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          ws.userId = session.userId;
-          wss.emit('connection', ws, request);
-        });
-      })
-      .catch((err) => {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-      });
-  });
-  
-  return wss;
+// src/routes/settings.js — in-memory defaults
+const settings = {
+  heading: 'OCDE Threat Map',
+  httpBindAddress: '127.0.0.1',
+  syslogBindAddress: '127.0.0.1',
+  httpPort: 3000,
+  syslogPort: 514,
+};
+
+// Exported for use by app.js during startup
+module.exports.getSettings = () => settings;
+```
+
+Settings GET is public (dashboard reads heading), PUT requires auth via inline `requireAuth`:
+
+```javascript
+router.put('/', requireAuth, (req, res) => {
+  for (const [key, value] of Object.entries(req.body)) {
+    if (settings.hasOwnProperty(key)) {
+      settings[key] = value;
+    }
+  }
+});
+```
+
+## Security Utilities
+
+`src/utils/security.js` provides primitives used across all auth routes.
+
+| Function | Purpose | Used By |
+|----------|---------|---------|
+| `hashPassword(plain)` | bcrypt hash (12 rounds) | change-password route |
+| `verifyPassword(plain, hash)` | bcrypt compare | login, change-password |
+| `safeCompare(a, b)` | Constant-time string comparison | login (username + initial password) |
+| `logSecurityEvent(event, details)` | Color-coded security logging | All auth routes |
+| `getClientIP(req)` | Extract IP from x-forwarded-for or socket | All auth routes, rate limiters |
+
+### Constant-Time Comparison
+
+```javascript
+// src/utils/security.js — prevents timing attacks on username/password
+function safeCompare(a, b) {
+  const maxLen = Math.max(a.length, b.length);
+  const paddedA = a.padEnd(maxLen, '\0');
+  const paddedB = b.padEnd(maxLen, '\0');
+  return crypto.timingSafeEqual(Buffer.from(paddedA), Buffer.from(paddedB));
 }
+```
+
+## WebSocket Session Sharing
+
+The `sessionParser` function is passed to the WebSocket server to authenticate upgrade requests. See the **websocket** skill for full connection lifecycle.
+
+```javascript
+// src/app.js — passing session parser to WS setup
+const wss = setupWebSocketServer(server, sessionParser);
+
+// src/websocket/ws-server.js — using it during upgrade
+httpServer.on('upgrade', (request, socket, head) => {
+  authenticateUpgrade(request, socket, sessionParser)
+    .then((session) => {
+      ws.userId = session ? session.userId : 'anonymous-' + Date.now();
+      ws.isAuthenticated = !!session;
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    });
+});
 ```
 
 ## WARNING: Service Anti-Patterns
 
-### Creating Multiple Session Instances
+### Mixing Route Logic with Service Logic
+
+**The Problem:** `src/routes/change-password.js` exports both a router and helper functions from the same module. This works for a single-admin app but becomes brittle if features grow.
+
+**When You Might Be Tempted:** Adding a second auth-related route that needs `isPasswordHashed()`.
+
+**The Fix:** If the app grows beyond single-admin, extract password state management into `src/services/password-service.js` and import from both routes.
+
+### Storing Secrets in Settings Object
 
 **The Problem:**
 
 ```javascript
-// BAD - Two separate session instances
-// file1.js
-const sessionParser1 = session({ secret: 'key1' });
-
-// file2.js  
-const sessionParser2 = session({ secret: 'key2' });
+// BAD — settings object is readable via GET /api/settings (public)
+settings.sessionSecret = process.env.SESSION_SECRET;
 ```
 
-**Why This Breaks:**
-1. Different secrets = incompatible session cookies
-2. User logged in via HTTP won't be authenticated on WebSocket
-3. Debugging nightmare - auth works sometimes
+**Why This Breaks:** GET /api/settings is public and returns the entire `settings` object. Any secret added to it leaks to unauthenticated users.
 
-**The Fix:**
-
-```javascript
-// GOOD - Single session module, exported once
-// src/middleware/session.js
-const sessionParser = session({ secret: process.env.SESSION_SECRET });
-module.exports = { sessionParser };
-
-// All consumers import the same instance
-const { sessionParser } = require('./middleware/session');
-```
-
-### Hardcoded Secrets in Service Code
-
-**The Problem:**
-
-```javascript
-// BAD - Secret embedded in code
-const sessionParser = session({
-  secret: 'my-hardcoded-secret-123'
-});
-```
-
-**Why This Breaks:**
-1. Secret gets committed to version control
-2. Same secret across all environments
-3. Cannot rotate without code change
-
-**The Fix:**
-
-```javascript
-// GOOD - Environment variable with development fallback
-const sessionParser = session({
-  secret: process.env.SESSION_SECRET || 'dev-only-change-in-production'
-});
-```
-
-### Session Store Memory Leaks
-
-**The Problem:**
-
-```javascript
-// BAD - Default MemoryStore in production
-// (No explicit store = MemoryStore)
-const sessionParser = session({
-  secret: process.env.SESSION_SECRET
-});
-```
-
-**Why This Breaks:**
-1. MemoryStore doesn't purge expired sessions
-2. Memory grows unbounded over time
-3. Sessions lost on server restart
-
-**When You Might Be Tempted:**
-- Quick development setup
-- "It works locally" syndrome
-- Forgetting to add production store config
-
-**Production Fix:**
-For this codebase (in-memory only, NOC display), MemoryStore is acceptable since the server rarely restarts and session count is limited. For production apps with many users, use Redis or connect-pg-simple.
-
-## Related Services
-
-See the **websocket** skill for WebSocket connection handling and session attachment.
+**The Fix:** Keep secrets in environment variables only. The `settings` object should contain only UI-safe configuration.

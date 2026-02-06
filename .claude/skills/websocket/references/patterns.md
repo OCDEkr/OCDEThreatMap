@@ -2,66 +2,99 @@
 
 ## Contents
 - Server Setup Patterns
+- Dual Authentication Model
 - Heartbeat Pattern
-- Broadcasting Patterns
+- Batched Broadcasting
+- Event Bus Integration
 - Client Reconnection
-- Error Handling
 - Anti-Patterns
 
 ## Server Setup Patterns
 
-### noServer Mode for Authentication
+### noServer Mode with Session Auth
 
-Use `noServer: true` when you need to authenticate before completing the WebSocket upgrade.
+Use `noServer: true` when you need to parse sessions before completing the upgrade. The `ws` library's built-in server mode skips the upgrade event entirely, making async authentication impossible.
 
 ```javascript
-// src/websocket/ws-server.js pattern
+// src/websocket/ws-server.js
 const wss = new WebSocketServer({
   noServer: true,
-  clientTracking: true
+  clientTracking: true  // Required — enables wss.clients Set for broadcast loops
 });
 
 httpServer.on('upgrade', (request, socket, head) => {
   authenticateUpgrade(request, socket, sessionParser)
     .then((session) => {
       wss.handleUpgrade(request, socket, head, (ws) => {
-        ws.userId = session.userId;  // Attach user info
+        ws.userId = session ? session.userId : 'anonymous-' + Date.now();
+        ws.isAuthenticated = !!session;
         wss.emit('connection', ws, request);
       });
-    })
-    .catch((err) => {
-      console.log('WebSocket auth failed:', err.message);
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
     });
 });
 ```
 
-**Why noServer:** The `ws` library's built-in server mode doesn't support async authentication during upgrade. noServer mode gives you full control over when `handleUpgrade` is called.
+**Why `clientTracking: true`:** Without it, `wss.clients` is undefined and every broadcast loop silently does nothing. The `ws` library defaults this to `true` when using its built-in server, but to `false` in noServer mode.
 
-### Connection Event Handling
+### Connection Event Setup
+
+Every connection needs three things: heartbeat tracking, close handler, and error handler.
 
 ```javascript
+// src/websocket/ws-server.js
 wss.on('connection', (ws, request) => {
   ws.isAlive = true;
-  ws.on('pong', function() { this.isAlive = true; });
+  ws.on('pong', heartbeatHandler);  // heartbeatHandler uses `this` binding
 
   ws.on('close', () => {
     ws.isAlive = false;
-    console.log('Client disconnected:', ws.userId);
   });
 
   ws.on('error', (err) => {
     console.error('WebSocket error:', err.message);
     ws.isAlive = false;
-    ws.terminate();  // Force kill on error
+    ws.terminate();  // NEVER close() on error — terminate immediately
   });
 });
 ```
 
+## Dual Authentication Model
+
+This project supports **both anonymous and authenticated** WebSocket connections. The dashboard is public (NOC display use case); admin features require a session. See the **express-session** skill for session middleware configuration.
+
+```javascript
+// src/websocket/auth-handler.js — Public access (dashboard)
+function authenticateUpgrade(request, socket, sessionParser) {
+  return new Promise((resolve) => {
+    sessionParser(request, {}, () => {
+      if (request.session && request.session.authenticated === true) {
+        resolve(request.session);  // Authenticated user
+      } else {
+        resolve(null);  // Anonymous — allowed for dashboard
+      }
+    });
+  });
+}
+
+// Admin-only variant — rejects unauthenticated connections
+function requireAuthUpgrade(request, socket, sessionParser) {
+  return new Promise((resolve, reject) => {
+    sessionParser(request, {}, () => {
+      if (request.session && request.session.authenticated === true) {
+        resolve(request.session);
+      } else {
+        reject(new Error('Not authenticated'));
+      }
+    });
+  });
+}
+```
+
+**Key:** `authenticateUpgrade` NEVER rejects. It resolves `null` for anonymous users. Use `requireAuthUpgrade` only for admin-only WebSocket endpoints that don't exist yet but are available if needed.
+
 ## Heartbeat Pattern
 
-Detect dead connections with ping/pong frames. Critical for NOC displays that run continuously.
+Detects dead connections via ping/pong. Critical for NOC displays running 24/7 where network drops go unnoticed.
 
 ```javascript
 // src/websocket/heartbeat.js
@@ -70,11 +103,8 @@ const HEARTBEAT_INTERVAL = 30000;  // 30 seconds
 function startHeartbeat(wss) {
   const interval = setInterval(() => {
     wss.clients.forEach((ws) => {
-      if (ws.isAlive === false) {
-        console.log('Terminating dead connection');
-        return ws.terminate();
-      }
-      ws.isAlive = false;
+      if (ws.isAlive === false) return ws.terminate();
+      ws.isAlive = false;  // Mark dead until pong proves otherwise
       ws.ping();
     });
   }, HEARTBEAT_INTERVAL);
@@ -82,109 +112,110 @@ function startHeartbeat(wss) {
   wss.on('close', () => clearInterval(interval));
 }
 
-// Bind to each connection
+// `this` is bound to the ws instance via ws.on('pong', heartbeatHandler)
 function heartbeatHandler() {
   this.isAlive = true;
 }
 ```
 
-**Why 30 seconds:** Balances responsiveness (detecting dead connections quickly) with overhead (ping frames add traffic). For NOC displays, dead connections cause stale visualizations.
+**Why 30s:** Balances detection speed vs overhead. Dead NOC connections cause stale visualizations. 30s detects within one missed cycle (60s worst case). Shorter intervals waste bandwidth on healthy connections.
 
-## Broadcasting Patterns
+## Batched Broadcasting
 
-### Safe Broadcast with State Check
+High-volume syslog traffic produces hundreds of events/second. Individual `send()` calls per event create excessive serialization and syscall overhead.
 
 ```javascript
-// src/websocket/attack-broadcaster.js pattern
-function broadcastAttack(wss, event) {
+// src/websocket/attack-broadcaster.js
+const BATCH_INTERVAL_MS = 100;
+const MAX_BATCH_SIZE = 50;
+
+function flushBatch() {
+  if (!wssRef || eventBatch.length === 0) return;
+
   const message = {
-    type: 'enriched',
-    timestamp: event.timestamp || new Date().toISOString(),
-    geo: event.geo ? { ...event.geo, country_code: event.geo.country } : null,
-    sourceIP: event.sourceIP,
-    destinationIP: event.destinationIP,
-    threatType: event.threatType
+    type: 'batch',
+    count: eventBatch.length,
+    events: eventBatch
   };
+  const messageStr = JSON.stringify(message);  // Stringify ONCE
 
-  const messageStr = JSON.stringify(message);
-
-  for (const client of wss.clients) {
+  for (const client of wssRef.clients) {
     if (client.readyState === WebSocket.OPEN) {
       try {
         client.send(messageStr);
       } catch (err) {
-        console.error('Send failed:', err.message);
-        client.terminate();
+        client.terminate();  // Dead connection — kill it
       }
     }
   }
+  eventBatch = [];
 }
 ```
 
-**Key points:**
-1. Check `readyState === WebSocket.OPEN` before every send
-2. Stringify once, send many times
-3. `terminate()` broken connections immediately
-4. Never let a bad client crash the broadcast loop
-
-### Event Bus Integration
+**Client must handle `type: 'batch'`:**
 
 ```javascript
-// src/websocket/broadcaster.js pattern
+// public/js/dashboard-client.js
+if (data.type === 'batch' && Array.isArray(data.events)) {
+  data.events.forEach(evt => processEvent(evt));
+  return;
+}
+```
+
+## Event Bus Integration
+
+The broadcaster bridges the event bus and WebSocket clients. See the **node** skill for EventEmitter patterns.
+
+```javascript
+// src/websocket/broadcaster.js
 function wireEventBroadcast(webSocketServer) {
-  const eventBus = require('../events/event-bus');
-  
+  wss = webSocketServer;
   eventBus.on('enriched', (event) => {
-    broadcastAttack(webSocketServer, event);
+    broadcastAttack(wss, event);
   });
 }
 ```
 
+The `enriched` event is emitted by `EnrichmentPipeline` after geolocation lookup. The broadcaster formats the event and queues it for batched delivery.
+
 ## Client Reconnection
 
-### ReconnectingWebSocket Configuration
+Dashboard uses `ReconnectingWebSocket` with fallback to manual reconnect if the library fails to load.
 
 ```javascript
-// public/js/dashboard-client.js pattern
-const ws = new ReconnectingWebSocket(wsUrl, [], {
-  connectionTimeout: 5000,      // Give up connecting after 5s
-  maxRetries: Infinity,         // Never stop trying
-  maxReconnectionDelay: 30000,  // Cap backoff at 30s
-  minReconnectionDelay: 500,    // Start at 500ms
-  reconnectionDelayGrowFactor: 1.5,  // Exponential backoff
-  minUptime: 5000               // Consider connected after 5s uptime
-});
+// public/js/dashboard-client.js
+if (typeof ReconnectingWebSocket !== 'undefined') {
+  ws = new ReconnectingWebSocket(wsUrl, [], { /* config */ });
+} else {
+  ws = new WebSocket(wsUrl);
+  ws.addEventListener('close', () => setTimeout(connect, 3000));
+}
 ```
 
-### Protocol Detection
+The library is served from `node_modules` via Express static route in `src/app.js`. See the **express** skill for that route.
 
-```javascript
-const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const wsUrl = `${protocol}//${location.host}`;
-```
+## Anti-Patterns
 
-## Error Handling
-
-### WARNING: Silent Send Failures
+### WARNING: Unguarded send() in Broadcast Loops
 
 **The Problem:**
 
 ```javascript
-// BAD - No error handling
+// BAD — One broken client crashes the entire broadcast
 wss.clients.forEach(client => {
   client.send(JSON.stringify(data));
 });
 ```
 
 **Why This Breaks:**
-1. `send()` throws if connection is closing
-2. One bad client crashes entire broadcast loop
-3. Dead connections accumulate, wasting memory
+1. `send()` throws if `readyState` is not OPEN
+2. One broken client prevents all subsequent clients from receiving data
+3. Dead connections accumulate without cleanup
 
 **The Fix:**
 
 ```javascript
-// GOOD - Defensive send with cleanup
+// GOOD — Check readyState, catch errors, terminate broken connections
 for (const client of wss.clients) {
   if (client.readyState === WebSocket.OPEN) {
     try {
@@ -196,32 +227,46 @@ for (const client of wss.clients) {
 }
 ```
 
-## Anti-Patterns
-
-### WARNING: Missing readyState Check
+### WARNING: Stringifying Per Client
 
 ```javascript
-// BAD - Sends to CONNECTING, CLOSING, CLOSED clients
-wss.clients.forEach(client => client.send(data));
+// BAD — N serializations for N clients
+for (const client of wss.clients) {
+  client.send(JSON.stringify(data));
+}
 
-// GOOD - Only send to OPEN clients
+// GOOD — Stringify once, send the same string to all
+const messageStr = JSON.stringify(data);
 for (const client of wss.clients) {
   if (client.readyState === WebSocket.OPEN) {
-    client.send(data);
+    client.send(messageStr);
   }
 }
 ```
 
+**When You Might Be Tempted:** When each client needs slightly different data (e.g., filtered by auth level). In this project, all clients receive the same batch — no per-client filtering on the server side.
+
 ### WARNING: Using close() for Dead Connections
 
 ```javascript
-// BAD - close() waits for graceful shutdown
+// BAD — Sends close frame and waits for ack from dead client (hangs)
 ws.close();
 
-// GOOD - terminate() immediately destroys socket
+// GOOD — Immediately destroys the underlying socket
 ws.terminate();
 ```
 
-**When to use each:**
-- `close()`: User-initiated logout, graceful shutdown
-- `terminate()`: Dead connection, error state, timeout
+**Why This Breaks:** `close()` initiates a graceful close handshake. Dead connections never respond, so the socket lingers in CLOSING state indefinitely, leaking file descriptors.
+
+### WARNING: Hardcoded WebSocket URLs
+
+```javascript
+// BAD — Breaks behind HTTPS reverse proxy
+const ws = new WebSocket('ws://localhost:3000');
+
+// GOOD — Auto-detect protocol and host
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${protocol}//${location.host}`);
+```
+
+**Why This Breaks:** Production deployments use HTTPS with TLS termination at a reverse proxy. Browsers block mixed content (HTTPS page connecting to `ws://`).

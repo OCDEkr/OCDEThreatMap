@@ -1,33 +1,117 @@
 # Layouts Reference
 
 ## Contents
-- Dashboard Layout Structure
-- Panel Positioning System
-- Responsive Breakpoints
-- Z-Index Management
+- Dashboard Layout Architecture
+- Z-Index Layering
+- Panel Positioning Map
+- Header Bar
+- Admin Panel Layout
+- Responsive Scaling
+- Spatial Rules
 
-## Dashboard Layout Structure
+## Dashboard Layout Architecture
 
-### Full-Screen Visualization Layout
+The dashboard (`public/dashboard.html`) uses a full-viewport overlay architecture. The globe/map fills the entire screen as z-index 1, and all UI elements float above it using absolute positioning.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ HEADER (z:15) - Logo + Title, centered, 80px height             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  [Status]   [Btn][Btn][Btn]                    [Top Stats Panels] │
-│  (top-left) (150px down)                       (bottom-right)   │
-│                                                                 │
-│                     GLOBE (z:1)                                 │
-│                   Full viewport                                 │
-│                                                                 │
-│  [Event Log]                            [Stats] [Countries]     │
-│  (bottom-left, 40vw)                    (bottom-right, stacked) │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
++--------------------------------------------------------------+
+|  HEADER BAR (z:15, full width, h:80px)                       |
++--------------------------------------------------------------+
+| [Status] (z:10)              [Stats Panel] (z:10)            |
+| top:90px, left:20px          top:90px, right:20px             |
+|                                                               |
+| [View][Filter][Rotate][Admin]                                 |
+| top:158px, left:20-200px                                      |
+|                                                               |
+|        +------------------------------------------+           |
+|        |                                          |           |
+|  LOGO  |        GLOBE / FLAT MAP (z:1)            |           |
+| (z:10) |        Full viewport background          |           |
+|  left  |                                          |           |
+|  20px  |                                          |           |
+|        +------------------------------------------+           |
+|                                                               |
+| [Event Log]                  [Top Countries]                  |
+| bottom:20px, left:20px       bottom:20px, right:20px          |
+| width:40vw, max-h:25vh       min-w:200, max-w:250px          |
++--------------------------------------------------------------+
 ```
 
-### Header Bar
+### WARNING: No Flexbox/Grid for Dashboard Panels
+
+The dashboard uses absolute positioning exclusively for HUD panels. Do NOT convert to flexbox or CSS grid. Absolute positioning allows panels to float independently over the globe/map without affecting each other's layout. Grid/flex would require a wrapper that blocks mouse interaction with the globe beneath.
+
+## Z-Index Layering
+
+| Z-Index | Elements | Purpose |
+|---------|----------|---------|
+| 1 | Globe container, flat map | Background visualization |
+| 10 | All HUD panels, buttons, logo | Floating UI elements |
+| 15 | Header bar | Always above everything |
+
+All HUD elements share z-index 10. They don't overlap in practice because they're anchored to different corners. If overlap is needed, use z-index 11-14 (reserve 15 for the header).
+
+## Panel Positioning Map
+
+### Top-Left Zone (Status + Controls)
+
+```css
+/* Connection status */
+#connection-status { top: 90px; left: 20px; }
+
+/* Control buttons - horizontal row */
+.view-toggle-btn    { top: 158px; left: 20px; }
+.ocde-filter-btn    { top: 158px; left: 80px; }   /* 20 + 50 + 10 gap */
+.rotate-toggle-btn  { top: 158px; left: 140px; }  /* 80 + 50 + 10 gap */
+.admin-panel-btn    { top: 158px; left: 200px; }  /* 140 + 50 + 10 gap */
+```
+
+Button spacing formula: each button is 50px wide with 10px gaps. Next button left = previous left + 60px.
+
+### Top-Right Zone (Metrics)
+
+```css
+/* Stats panel */
+#stats-panel { top: 90px; right: 20px; }
+```
+
+### Bottom-Left Zone (Event Feed)
+
+```css
+#event-log {
+  bottom: 20px;
+  left: 20px;
+  width: 40vw;
+  max-width: 40vw;
+  max-height: 25vh;
+}
+```
+
+### Bottom-Right Zone (Rankings)
+
+```css
+#top-countries-panel {
+  bottom: 20px;
+  right: 20px;
+  min-width: 200px;
+  max-width: 250px;
+}
+```
+
+### Center-Left Zone (Logo)
+
+```css
+#side-logo {
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 480px;
+}
+```
+
+## Header Bar
+
+Full-width fixed header with blur backdrop:
 
 ```css
 #header {
@@ -39,7 +123,7 @@
   background: rgba(0, 0, 0, 0.85);
   border-bottom: 2px solid #00d9ff;
   z-index: 15;
-  display: flex;
+  display: flex;                       /* Only flexbox usage in dashboard */
   align-items: center;
   justify-content: center;
   gap: 20px;
@@ -48,145 +132,91 @@
 }
 ```
 
-### Globe Container (Background Layer)
+The header is the ONE exception to "no flexbox" -- it centers the logo and title horizontally using `display: flex`.
 
-```css
-#globe {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-  background: #000000;
-}
-```
+## Admin Panel Layout
 
-## Panel Positioning System
-
-### Bottom-Right Stack (Stats Panels)
-
-```javascript
-// Panels stack from right edge, moving left
-// Each panel offset by previous panel width + gap
-
-// Stats panel (rightmost)
-right: 20px;
-min-width: 180px;
-
-// Top Countries panel (middle)
-right: 220px;  // 20px + 180px + 20px gap
-min-width: 200px;
-
-// Top Attacks panel (leftmost)
-right: 480px;  // 220px + 200px + 60px gap
-min-width: 200px;
-```
-
-### Top-Left Control Buttons
-
-```css
-/* Horizontal button row */
-.view-toggle-btn    { top: 150px; left: 20px; }   /* First */
-.ocde-filter-btn    { top: 150px; left: 80px; }   /* Second (20 + 50 + 10) */
-.rotate-toggle-btn  { top: 150px; left: 140px; }  /* Third (80 + 50 + 10) */
-```
-
-### Event Log (Bottom-Left)
-
-```css
-#event-log {
-  position: absolute;
-  bottom: 20px;
-  left: 20px;
-  width: 40vw;       /* 40% viewport width */
-  max-width: 40vw;   /* Never exceed 40% */
-  max-height: 25vh;  /* Never exceed 25% viewport height */
-}
-```
-
-## Responsive Breakpoints
-
-### HD Displays (1920px+)
-
-```css
-@media (min-width: 1920px) {
-  #connection-status {
-    font-size: 28px;
-    padding: 15px 25px;
-  }
-  
-  #event-log {
-    width: 450px;  /* Fixed width on large screens */
-  }
-  
-  #event-header { font-size: 18px; }
-  #events-container { font-size: 14px; }
-}
-```
-
-### 4K Displays (3840px+)
-
-```css
-@media (min-width: 3840px) {
-  #connection-status {
-    font-size: 36px;
-    padding: 20px 35px;
-  }
-  
-  #event-log {
-    width: 600px;
-    padding: 15px;
-  }
-  
-  #event-header { font-size: 20px; }
-  #events-container { font-size: 16px; }
-  
-  .event-item {
-    margin: 6px 0;
-    padding: 4px 6px;
-  }
-}
-```
-
-## Z-Index Management
-
-### Layer Stack
-
-| Z-Index | Layer | Elements |
-|---------|-------|----------|
-| 1 | Background | `#globe`, `#flat-map` |
-| 10 | UI Controls | Buttons, panels, status badges |
-| 15 | Header | `#header` (always above UI) |
-| 20+ | Reserved | Future modals, tooltips |
-
-### WARNING: Z-Index Conflicts
-
-```css
-/* BAD - Panel hidden behind globe */
-#my-panel { z-index: 1; }  /* Same as globe */
-
-/* GOOD - Panel visible above globe */
-#my-panel { z-index: 10; }
-```
-
-### Fullscreen Element Pattern
-
-```css
-/* Elements that fill viewport */
-.fullscreen-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-}
-```
-
-### Preventing Body Scroll
+The admin page (`public/admin.html`) uses a different layout model: scrollable page with a centered container.
 
 ```css
 body {
-  overflow: hidden;  /* No scrollbars on NOC display */
-  height: 100vh;
+  padding: 20px;
+  min-height: 100vh;      /* Scrollable, not overflow:hidden */
 }
+
+.container {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+```
+
+### Admin Grid: Stats Cards
+
+```css
+.stats-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+}
+```
+
+Admin uses CSS grid for stat cards because it's a scrollable page, not an overlay layout.
+
+### Collapsible Sections
+
+Admin settings use manual toggle sections (no details/summary):
+
+```css
+.section-toggle {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 2px solid #00d9ff;
+  border-radius: 8px;
+}
+
+.section-content { display: none; }
+.section-content.expanded { display: block; }
+```
+
+## Responsive Scaling
+
+Three breakpoints for NOC display sizes in `public/css/dashboard.css`:
+
+```css
+/* Default: standard monitors */
+
+/* Full HD NOC displays */
+@media (min-width: 1920px) {
+  #connection-status { font-size: 28px; padding: 15px 25px; }
+  #event-header { font-size: 26px; }
+  #events-container { font-size: 18px; }
+  #event-log { width: 450px; font-size: 18px; }
+}
+
+/* 4K NOC displays */
+@media (min-width: 3840px) {
+  #connection-status { font-size: 36px; padding: 20px 35px; }
+  #event-header { font-size: 30px; }
+  #events-container { font-size: 20px; }
+  #event-log { width: 600px; padding: 15px; font-size: 20px; }
+  .event-item { margin: 6px 0; padding: 4px 6px; }
+}
+```
+
+### WARNING: Missing Responsive Rules on Dynamic Panels
+
+The JS-created panels (`stats-display.js`, `top-stats.js`) use inline styles and have NO responsive breakpoints. When adding new JS-created panels, either add responsive CSS classes to `dashboard.css` or use `window.matchMedia()` to adjust inline styles.
+
+## Spatial Rules
+
+1. **20px margin** from all viewport edges (consistent padding on every panel)
+2. **10px gap** between adjacent buttons
+3. **80px** header height clears all content below
+4. **90px** top offset for first row of panels (80px header + 10px gap)
+5. **Panels NEVER exceed 40% viewport width** for event log, 250px max for stat panels
+6. **25vh maximum height** for scrollable panels to preserve globe visibility
+7. **No panel should cover the globe center** -- keep panels at edges and corners

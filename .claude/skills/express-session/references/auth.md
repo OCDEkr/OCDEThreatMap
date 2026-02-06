@@ -1,63 +1,102 @@
-# Authentication Reference
+# Auth Reference
 
 ## Contents
-- Authentication Middleware
-- Session-Based Auth Flow
+- Authentication Model
+- Login Flow
+- Route Protection
 - WebSocket Authentication
-- WARNING: Auth Anti-Patterns
-- Auth Checklist
+- Session Properties
+- Password Verification Modes
+- Anti-Patterns
 
-## Authentication Middleware
+## Authentication Model
 
-The `requireAuth` middleware gates access to protected routes.
+Single-admin authentication. One username (from `DASHBOARD_USERNAME` env var, default `admin`) and one password (from `DASHBOARD_PASSWORD` env var or `data/password.hash` file). No user registration, no roles, no multi-user.
+
+## Login Flow
+
+1. Client sends POST /login with `{ username, password }`
+2. Rate limiter checks IP (5 attempts / 15 min)
+3. Username verified with constant-time comparison (`safeCompare`)
+4. Password verified with bcrypt (if changed) or constant-time comparison (if initial)
+5. On success: session properties set, 200 returned
+6. On failure: generic "Invalid credentials" (prevents username enumeration)
 
 ```javascript
-// src/middleware/auth-check.js
-function requireAuth(req, res, next) {
-  if (req.session && req.session.authenticated === true) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Not authenticated' });
-  }
+// src/routes/login.js — session creation
+req.session.userId = username;
+req.session.authenticated = true;
+req.session.loginTime = Date.now();
+req.session.ip = clientIP;
+```
+
+## Route Protection
+
+### requireAuth Middleware
+
+Applied to routes in two ways:
+
+**1. In app.js middleware chain (preferred for entire route groups):**
+
+```javascript
+app.use('/api/change-password', passwordChangeLimiter, requireAuth, changePasswordRouter);
+app.get('/admin', requireAuth, (req, res) => { /* ... */ });
+```
+
+**2. Inside route files (for mixed public/protected routes):**
+
+```javascript
+// src/routes/settings.js — GET is public, PUT requires auth
+router.get('/', (req, res) => { /* public */ });
+router.put('/', requireAuth, (req, res) => { /* protected */ });
+```
+
+### Content Negotiation in Auth Guard
+
+The `requireAuth` middleware responds differently based on request type:
+
+```javascript
+// API requests get 401 JSON
+if (isApiRequest) {
+  res.status(401).json({ error: 'Not authenticated' });
 }
-
-module.exports = { requireAuth };
+// Browser requests get redirected to login
+else {
+  res.redirect('/login');
+}
 ```
 
-## Session-Based Auth Flow
-
-1. User submits credentials to `/login`
-2. Server validates and sets `req.session.authenticated = true`
-3. Cookie with session ID sent to browser
-4. Subsequent requests include cookie automatically
-5. `requireAuth` middleware checks session state
-
-```javascript
-// Login creates session
-router.post('/', (req, res) => {
-  const { username, password } = req.body;
-  
-  if (username === validUsername && password === validPassword) {
-    req.session.userId = username;
-    req.session.authenticated = true;
-    res.json({ success: true });
-  } else {
-    res.status(401).json({ error: 'Invalid credentials' });
-  }
-});
-```
+Detection logic: path starts with `/api`, Accept header includes `application/json`, or `req.xhr` is true.
 
 ## WebSocket Authentication
 
-WebSocket connections authenticate during the HTTP upgrade handshake using the same session.
+WebSocket connections use the same session cookies as HTTP. The `sessionParser` is invoked manually during the HTTP upgrade. See the **websocket** skill for full connection lifecycle.
+
+### Public Dashboard Access (Anonymous)
 
 ```javascript
-// src/websocket/auth-handler.js
+// src/websocket/auth-handler.js — allows unauthenticated WS connections
 function authenticateUpgrade(request, socket, sessionParser) {
-  return new Promise((resolve, reject) => {
-    // Parse session from upgrade request cookies
+  return new Promise((resolve) => {
     sessionParser(request, {}, () => {
-      if (request.session && request.session.authenticated === true) {
+      if (request.session?.authenticated === true) {
+        resolve(request.session);  // Authenticated user
+      } else {
+        resolve(null);             // Anonymous — allowed for dashboard
+      }
+    });
+  });
+}
+```
+
+### Admin-Only WebSocket Access (Reject Anonymous)
+
+```javascript
+// src/websocket/auth-handler.js — for admin-only WS endpoints
+function requireAuthUpgrade(request, socket, sessionParser) {
+  return new Promise((resolve, reject) => {
+    sessionParser(request, {}, () => {
+      if (request.session?.authenticated === true) {
         resolve(request.session);
       } else {
         reject(new Error('Not authenticated'));
@@ -67,151 +106,72 @@ function authenticateUpgrade(request, socket, sessionParser) {
 }
 ```
 
-```javascript
-// src/websocket/ws-server.js - Using auth handler
-httpServer.on('upgrade', (request, socket, head) => {
-  authenticateUpgrade(request, socket, sessionParser)
-    .then((session) => {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        ws.userId = session.userId;  // Attach user identity
-        wss.emit('connection', ws, request);
-      });
-    })
-    .catch((err) => {
-      console.log('WebSocket authentication failed:', err.message);
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-    });
-});
-```
+## Session Properties
+
+| Property | Type | Set When | Purpose |
+|----------|------|----------|---------|
+| `authenticated` | `boolean` | Login success | Primary auth flag — always check `=== true` |
+| `userId` | `string` | Login success | Username for logging |
+| `loginTime` | `number` | Login success | Timestamp for session age tracking |
+| `ip` | `string` | Login success | Client IP at login time |
+| `passwordChangedAt` | `number` | Password change | Marks session as post-change |
+
+## Password Verification Modes
+
+Two modes based on whether admin has changed the default password:
+
+| Mode | When | Method | Source |
+|------|------|--------|--------|
+| Plaintext | Initial (no `data/password.hash`) | `safeCompare` | `DASHBOARD_PASSWORD` env var |
+| Hashed | After first password change | `bcrypt.compare` | `data/password.hash` file |
+
+The `isPasswordHashed()` function determines which mode to use. Both login and change-password routes use this dispatch.
 
 ## WARNING: Auth Anti-Patterns
 
-### Checking Only Truthy Values
+### Truthy Check Instead of Strict Equality
 
 **The Problem:**
 
 ```javascript
-// BAD - Truthy check
-if (req.session.authenticated) {
-  next();
-}
+// BAD — truthy check
+if (req.session.authenticated) { next(); }
 ```
 
-**Why This Breaks:**
-1. Empty object `{}` is truthy
-2. String `'false'` is truthy
-3. Allows unintended access
+**Why This Breaks:** Any truthy value passes — a string, a number, an object. If session data is corrupted or manipulated, non-boolean truthy values could bypass auth.
 
 **The Fix:**
 
 ```javascript
-// GOOD - Strict equality
-if (req.session && req.session.authenticated === true) {
-  next();
-}
+// GOOD — strict boolean check
+if (req.session && req.session.authenticated === true) { next(); }
 ```
 
-### Missing Session Existence Check
+### Leaking Username Validity
 
 **The Problem:**
 
 ```javascript
-// BAD - No session existence check
-if (req.session.authenticated === true) {
-  next();
-}
+// BAD — different errors reveal which field is wrong
+if (!usernameValid) res.json({ error: 'User not found' });
+if (!passwordValid) res.json({ error: 'Wrong password' });
 ```
 
-**Why This Breaks:**
-1. `req.session` may be undefined if session middleware failed
-2. Throws TypeError attempting to access `.authenticated`
-3. Crashes the request handler
+**Why This Breaks:** Attackers enumerate valid usernames by comparing error messages.
 
-**The Fix:**
+**The Fix:** Always return a generic message regardless of which field failed:
 
 ```javascript
-// GOOD - Check session exists first
-if (req.session && req.session.authenticated === true) {
-  next();
-}
+// GOOD — generic error prevents enumeration
+res.status(401).json({ success: false, error: 'Invalid credentials' });
 ```
 
-### Exposing Internal Errors to Client
+### Adding New Auth Route Checklist
 
-**The Problem:**
-
-```javascript
-// BAD - Detailed error message
-res.status(401).json({ 
-  error: 'User kriley not found in database table users'
-});
-```
-
-**Why This Breaks:**
-1. Reveals username exists/doesn't exist (user enumeration)
-2. Exposes database schema information
-3. Aids attackers in targeted attacks
-
-**The Fix:**
-
-```javascript
-// GOOD - Generic message
-res.status(401).json({ error: 'Invalid credentials' });
-```
-
-### Timing Attacks in Credential Check
-
-**The Problem:**
-
-```javascript
-// BAD - Short-circuit evaluation
-if (username !== validUsername) {
-  return res.status(401).json({ error: 'Invalid' });
-}
-if (password !== validPassword) {
-  return res.status(401).json({ error: 'Invalid' });
-}
-```
-
-**Why This Breaks:**
-1. Invalid username responds faster than invalid password
-2. Timing difference reveals valid usernames
-3. Enables username enumeration
-
-**When You Might Be Tempted:**
-- Early return for "efficiency"
-- Separate error messages for debugging
-
-**The Fix (for sensitive applications):**
-
-```javascript
-// GOOD - Constant-time comparison (for high-security apps)
-const crypto = require('crypto');
-const usernameMatch = crypto.timingSafeEqual(
-  Buffer.from(username), Buffer.from(validUsername)
-);
-const passwordMatch = crypto.timingSafeEqual(
-  Buffer.from(password), Buffer.from(validPassword)
-);
-if (usernameMatch && passwordMatch) {
-  // Authenticated
-}
-```
-
-Note: For this NOC dashboard with environment-variable credentials, the simple comparison is acceptable.
-
-## Auth Implementation Checklist
-
-Copy this checklist when implementing authentication:
-- [ ] Session middleware applied before auth routes
-- [ ] Strict equality check (`=== true`) for authenticated flag
-- [ ] Null check on `req.session` before accessing properties
-- [ ] Generic error messages (no user enumeration)
-- [ ] Session destroyed on logout with callback handling
-- [ ] WebSocket upgrade uses same session parser
-- [ ] 401 response for unauthenticated requests
-
-## Related Skills
-
-See the **websocket** skill for WebSocket-specific authentication patterns.
+Copy this checklist and track progress:
+- [ ] Add rate limiter appropriate to the endpoint sensitivity
+- [ ] Apply `requireAuth` middleware (in app.js or route file)
+- [ ] Log security events via `logSecurityEvent()`
+- [ ] Return generic error messages (no internal details)
+- [ ] Use `getClientIP(req)` for IP logging (handles x-forwarded-for)
+- [ ] Test with expired/missing session cookie

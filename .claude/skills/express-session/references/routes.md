@@ -1,170 +1,166 @@
 # Routes Reference
 
 ## Contents
-- Login Route Pattern
-- Logout Route Pattern
-- Protected Route Pattern
-- Route Mounting
-- WARNING: Common Route Mistakes
+- Auth Routes (Login, Logout)
+- Protected Route Mounting
+- Public vs Protected Route Pattern
+- Rate Limiter Integration
+- Anti-Patterns
 
-## Login Route Pattern
+## Auth Routes
 
-The login route validates credentials and establishes session state.
+### POST /login — Credential Verification
 
 ```javascript
-// src/routes/login.js
-const express = require('express');
-const router = express.Router();
-
-router.post('/', (req, res) => {
+// src/routes/login.js — mounted at app.use('/login', loginLimiter, loginRouter)
+router.post('/', async (req, res) => {
   const { username, password } = req.body;
-  
-  const validUsername = process.env.DASHBOARD_USERNAME || 'admin';
-  const validPassword = process.env.DASHBOARD_PASSWORD || 'change-me';
-  
-  if (username === validUsername && password === validPassword) {
+  const clientIP = getClientIP(req);
+
+  if (!username || !password) {
+    return res.status(400).json({ success: false, error: 'Username and password are required' });
+  }
+
+  const usernameValid = safeCompare(username, validUsername);
+  let passwordValid = false;
+
+  if (isPasswordHashed()) {
+    passwordValid = await verifyPassword(password, getPasswordHash());
+  } else {
+    passwordValid = safeCompare(password, getCurrentPassword());
+  }
+
+  if (usernameValid && passwordValid) {
     req.session.userId = username;
     req.session.authenticated = true;
+    req.session.loginTime = Date.now();
+    req.session.ip = clientIP;
+    logSecurityEvent('login_success', { username, ip: clientIP });
     res.json({ success: true });
   } else {
-    res.status(401).json({
-      success: false,
-      error: 'Invalid credentials'
-    });
+    logSecurityEvent('login_failed', { username, ip: clientIP });
+    res.status(401).json({ success: false, error: 'Invalid credentials' });
   }
 });
-
-module.exports = router;
 ```
 
-## Logout Route Pattern
-
-Proper session destruction with error handling.
+### POST /logout — Session Destruction
 
 ```javascript
-// src/routes/logout.js
+// src/routes/logout.js — always clear the cookie by name
 router.post('/', (req, res) => {
+  const username = req.session?.userId || 'unknown';
   req.session.destroy((err) => {
     if (err) {
-      console.error('Session destruction error:', err);
       return res.status(500).json({ error: 'Logout failed' });
     }
+    logSecurityEvent('logout', { username, ip: getClientIP(req) });
+    res.clearCookie('ocde.sid');  // Must match session name in session.js
     res.json({ success: true });
   });
 });
 ```
 
-## Protected Route Pattern
+## Protected Route Mounting
 
-Apply `requireAuth` middleware to sensitive routes.
-
-```javascript
-// src/app.js
-const { requireAuth } = require('./middleware/auth-check');
-
-// Protected routes
-app.get('/dashboard', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html'));
-});
-
-// Public routes (no middleware)
-app.use('/login', loginRouter);
-```
-
-## Route Mounting
+### Middleware Chains in app.js
 
 ```javascript
-// src/app.js - Correct order
-app.use(bodyParser.json());    // Parse JSON bodies first
-app.use(sessionParser);        // Session middleware second
-app.use(express.static('public')); // Static files
-
-// Mount route modules
-app.use('/login', loginRouter);
-app.use('/logout', logoutRouter);
-```
-
-## WARNING: Common Route Mistakes
-
-### Middleware Order Matters
-
-**The Problem:**
-
-```javascript
-// BAD - Session middleware AFTER routes
-app.use('/login', loginRouter);
-app.use(sessionParser);  // Too late - login route has no session
-```
-
-**Why This Breaks:**
-1. Routes mounted before session middleware won't have `req.session`
-2. Login will fail silently or throw undefined errors
-3. Session cookies won't be set
-
-**The Fix:**
-
-```javascript
-// GOOD - Session middleware BEFORE routes
-app.use(sessionParser);
-app.use('/login', loginRouter);
-```
-
-### Missing Error Response in Logout
-
-**The Problem:**
-
-```javascript
-// BAD - Ignoring destroy callback errors
-router.post('/', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });  // May respond before destroy completes
+// src/app.js — each route has its own middleware stack
+app.use('/login', loginLimiter, loginRouter);           // Rate limited, no auth
+app.use('/logout', logoutRouter);                        // No auth (destroy is safe)
+app.use('/api/change-password', passwordChangeLimiter, requireAuth, changePasswordRouter);
+app.use('/api/settings', settingsRouter);                // GET public, PUT uses requireAuth internally
+app.use('/api/logo', logoRouter);                        // GET public, POST/DELETE use requireAuth internally
+app.get('/admin', requireAuth, (req, res) => {           // Inline guard
+  res.sendFile(path.join(__dirname, '..', 'public', 'admin.html'));
 });
 ```
 
-**Why This Breaks:**
-1. Session may still exist in store if destroy fails
-2. Client thinks logout succeeded when it didn't
-3. Race condition with response
+## Public vs Protected Route Pattern
 
-**The Fix:**
+This codebase uses a **hybrid access model**: dashboard is public (NOC display), admin functions require auth.
 
-```javascript
-// GOOD - Handle destroy callback
-router.post('/', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      return res.status(500).json({ error: 'Logout failed' });
-    }
-    res.json({ success: true });
-  });
-});
-```
+| Route | Auth | Rate Limit | Why |
+|-------|------|------------|-----|
+| GET /dashboard | No | No | NOC displays run unattended |
+| GET /api/settings | No | API (100/min) | Dashboard reads heading text |
+| PUT /api/settings | Yes | API (100/min) | Only admin changes config |
+| GET /api/auth/status | No | API (100/min) | Client checks auth state |
+| POST /login | No | Login (5/15min) | Must be reachable to authenticate |
 
-### Truthy vs Strict Equality Check
-
-**The Problem:**
+### Auth Guard with Content Negotiation
 
 ```javascript
-// BAD - Truthy check allows unexpected values
-if (req.session.authenticated) {
-  next();
+// src/middleware/auth-check.js — returns 401 for API, redirects for HTML
+function requireAuth(req, res, next) {
+  if (req.session && req.session.authenticated === true) {
+    return next();
+  }
+  const isApiRequest = req.path.startsWith('/api') ||
+    req.headers.accept?.includes('application/json') || req.xhr;
+  isApiRequest
+    ? res.status(401).json({ error: 'Not authenticated' })
+    : res.redirect('/login');
 }
 ```
 
-**Why This Breaks:**
-1. String `'false'` is truthy
-2. Any non-empty value passes
-3. Type coercion vulnerabilities
+## Rate Limiter Integration
+
+Rate limiters from `src/middleware/rate-limiter.js` are applied per-route in app.js, not globally. See the **express** skill for Helmet and middleware ordering.
+
+```javascript
+// Three separate limiters with different windows
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5 });          // 5/15min
+const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 100 });               // 100/min
+const passwordChangeLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 3 }); // 3/hr
+```
+
+## WARNING: Route Anti-Patterns
+
+### Forgetting clearCookie on Logout
+
+**The Problem:**
+
+```javascript
+// BAD — session destroyed but cookie lingers
+req.session.destroy(() => {
+  res.json({ success: true });
+});
+```
+
+**Why This Breaks:** The browser keeps sending the old `ocde.sid` cookie. Express-session creates a new empty session for each request, wasting memory. The client may appear "half-logged-in" if any code checks cookie presence.
 
 **The Fix:**
 
 ```javascript
-// GOOD - Strict equality check
-if (req.session && req.session.authenticated === true) {
-  next();
-}
+// GOOD — destroy session AND clear cookie
+req.session.destroy(() => {
+  res.clearCookie('ocde.sid');
+  res.json({ success: true });
+});
 ```
 
-## Integration with Express Router
+### Using Default Cookie Name
 
-See the **express** skill for router patterns and middleware chaining.
+**The Problem:**
+
+```javascript
+// BAD — exposes technology stack
+const sessionParser = session({ secret: '...' });
+// Creates cookie named 'connect.sid'
+```
+
+**Why This Breaks:** Automated scanners fingerprint `connect.sid` to identify Express/Node.js targets. Custom names like `ocde.sid` reduce attack surface visibility.
+
+**The Fix:** Always set `name` in session config (already done in `src/middleware/session.js`).
+
+### Adding New Route Checklist
+
+Copy this checklist and track progress:
+- [ ] Decide: public or protected? If protected, add `requireAuth`
+- [ ] Choose rate limiter tier (login/API/password) or create new one
+- [ ] Mount in app.js with correct middleware order: `limiter, auth, router`
+- [ ] Use `{ success: boolean, error?: string }` response format
+- [ ] Log security events via `logSecurityEvent()` if auth-related
+- [ ] Test with expired/missing session cookie

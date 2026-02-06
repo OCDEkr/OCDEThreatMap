@@ -5,30 +5,45 @@
 - Cache Monitoring Setup
 - Performance Tuning
 - Testing Cache Behavior
+- Graceful Shutdown
 
 ---
 
 ## Integration with Enrichment Pipeline
 
-The cache wraps the geolocation service and is consumed by the enrichment pipeline.
-
-### Initialization Flow
+The cache wraps geolocation and is consumed by the enrichment pipeline. See the **maxmind** skill for `GeoLocator`.
 
 ```javascript
 // From src/enrichment/enrichment-pipeline.js
 class EnrichmentPipeline extends EventEmitter {
   constructor(eventBus) {
     super();
-    this.geoLocator = new CachedGeoLocator();  // Cache wrapper
+    this.eventBus = eventBus;
+    this.geoLocator = new CachedGeoLocator();  // Cache wrapper, not raw GeoLocator
   }
-
   async initialize() {
-    await this.geoLocator.initialize();  // Loads MaxMind DB
-    this.geoLocator.startMetricsLogging(30000);  // 30-second intervals
-    
-    this.eventBus.on('parsed', (event) => {
-      this.enrich(event);
+    await this.geoLocator.initialize();
+    this.geoLocator.startMetricsLogging(30000);
+    this.eventBus.on('parsed', (event) => this.enrich(event));
+  }
+}
+```
+
+```javascript
+// Enrichment method — src/enrichment/enrichment-pipeline.js:44-96
+enrich(event) {
+  const startTime = Date.now();
+  try {
+    const geoData = this.geoLocator.get(event.sourceIP);
+    this.eventBus.emit('enriched', {
+      ...event,
+      geo: geoData ? { latitude: geoData.latitude, longitude: geoData.longitude,
+        city: geoData.city, country: geoData.country, countryName: geoData.countryName } : null,
+      isOCDETarget: isOCDETarget(event.destinationIP, this.ocdeRanges),
+      enrichmentTime: Date.now() - startTime
     });
+  } catch (err) {
+    this.eventBus.emit('enriched', { ...event, geo: null, enrichmentError: err.message });
   }
 }
 ```
@@ -36,48 +51,24 @@ class EnrichmentPipeline extends EventEmitter {
 ### Integration Checklist
 
 Copy this checklist and track progress:
-- [ ] Step 1: Create CachedGeoLocator instance in constructor
-- [ ] Step 2: Call `initialize()` in async startup
-- [ ] Step 3: Start metrics logging after initialization
-- [ ] Step 4: Wire event listener for parsed events
-- [ ] Step 5: Use `get()` in enrichment method
+- [ ] Import `CachedGeoLocator` from `src/enrichment/cache.js`
+- [ ] Create instance in constructor
+- [ ] Call `await initialize()` in async startup
+- [ ] Call `startMetricsLogging(30000)` after initialization
+- [ ] Use `get(ip)` for lookups — handles null gracefully
+- [ ] Wire `stopMetricsLogging()` into shutdown handler
 
 ---
 
 ## Cache Monitoring Setup
 
-### Metrics Collection
-
-```javascript
-// From src/enrichment/cache.js:66-79
-getMetrics() {
-  const total = this.metrics.hits + this.metrics.misses;
-  const hitRate = total > 0 ? (this.metrics.hits / total * 100).toFixed(2) : 0;
-  const uptimeSeconds = Math.floor((Date.now() - this.metrics.startTime) / 1000);
-
-  return {
-    hits: this.metrics.hits,
-    misses: this.metrics.misses,
-    hitRate: parseFloat(hitRate),
-    cacheSize: this.cache.size,
-    maxSize: 10000,
-    uptimeSeconds
-  };
-}
-```
-
-### Periodic Logging with Warning Threshold
-
 ```javascript
 // From src/enrichment/cache.js:94-113
 startMetricsLogging(intervalMs = 30000) {
+  if (this.metricsInterval) { return; }
   this.metricsInterval = setInterval(() => {
     const metrics = this.getMetrics();
-    
-    console.log(`[GeoCache] Hits: ${metrics.hits} | Misses: ${metrics.misses} | ` +
-                `Hit Rate: ${metrics.hitRate}% | Size: ${metrics.cacheSize}/${metrics.maxSize}`);
-    
-    // Warning if hit rate below 80% target
+    console.log(`[GeoCache] Hit Rate: ${metrics.hitRate}% | Size: ${metrics.cacheSize}/${metrics.maxSize}`);
     if (metrics.hitRate < 80 && (metrics.hits + metrics.misses) > 100) {
       console.warn(`[GeoCache] WARNING: Hit rate ${metrics.hitRate}% below 80% target`);
     }
@@ -87,113 +78,84 @@ startMetricsLogging(intervalMs = 30000) {
 
 ### Monitoring Validation Loop
 
-1. Start application with logging enabled
-2. Observe cache metrics in console output
-3. If hit rate < 80% after 100+ lookups, investigate:
-   - Are most IPs unique? (Normal for diverse attack sources)
-   - Is TTL too short for traffic patterns?
-   - Is max size too small for working set?
-4. Adjust parameters and repeat step 2
+1. Start: `SYSLOG_PORT=5514 node src/app.js`
+2. Traffic: `node test/send-random-attacks.js`
+3. Watch `[GeoCache]` lines every 30 seconds
+4. If hit rate < 80% after 100+ lookups, tune parameters (see below)
+5. Repeat until hit rate stabilizes above 80%
 
 ---
 
 ## Performance Tuning
 
-### Sizing the Cache
-
-**Rule of thumb:** Cache should hold your working set with ~20% headroom.
-
 ```javascript
-// For this threat map with diverse attack IPs:
-// - Expect 5,000-8,000 unique IPs per hour
-// - Set max to 10,000 for headroom
-// - 1-hour TTL matches expected IP repeat rate
-
+// Current config — sized for 5,000-8,000 unique IPs per hour
 this.cache = new LRUCache({
-  max: 10000,
-  ttl: 1000 * 60 * 60,  // 1 hour
+  max: 10000,              // ~20% headroom over working set
+  ttl: 1000 * 60 * 60,     // 1-hour TTL matches IP repeat rate
+  updateAgeOnGet: false,
 });
 ```
 
-### When to Increase Cache Size
+| Symptom | Metric | Action |
+|---------|--------|--------|
+| Hit rate < 80% | `hitRate` | Increase `max` |
+| Cache always full | `cacheSize === maxSize` | Increase `max` |
+| Memory too high | OS monitoring | Decrease `max` or TTL |
+| Stale geo data | Dashboard inspection | Decrease TTL |
 
-| Symptom | Action |
-|---------|--------|
-| Hit rate < 80% consistently | Increase `max` |
-| `cache.size` always at `max` | Increase `max` |
-| Memory usage acceptable | Safe to increase |
-
-### When to Decrease TTL
-
-| Symptom | Action |
-|---------|--------|
-| Geo data becomes stale | Decrease TTL |
-| Need fresher MaxMind updates | Decrease TTL |
+**Memory:** ~200 bytes/entry. At `max: 10000` = ~2-3 MB heap — negligible.
 
 ---
 
 ## Testing Cache Behavior
 
-### Reset Metrics Between Tests
-
 ```javascript
-// From src/enrichment/cache.js:84-88
-resetMetrics() {
-  this.metrics.hits = 0;
-  this.metrics.misses = 0;
-  this.metrics.startTime = Date.now();
-}
-```
-
-### Verifying Cache Hit Behavior
-
-```javascript
-// Test: Second lookup should be a cache hit
+const { CachedGeoLocator } = require('../src/enrichment/cache');
 const cache = new CachedGeoLocator();
 await cache.initialize();
+
+// Verify hit/miss
 cache.resetMetrics();
+cache.get('8.8.8.8');  // Miss
+cache.get('8.8.8.8');  // Hit
+const m1 = cache.getMetrics();
+assert(m1.hits === 1 && m1.misses === 1 && m1.hitRate === 50);
 
-cache.get('8.8.8.8');  // Miss - first lookup
-cache.get('8.8.8.8');  // Hit - cached
-
-const metrics = cache.getMetrics();
-assert(metrics.hits === 1);
-assert(metrics.misses === 1);
-assert(metrics.hitRate === 50);
+// Verify negative caching (null is cached, not re-fetched)
+cache.resetMetrics();
+cache.get('192.168.1.1');  // Miss — null (private IP)
+cache.get('192.168.1.1');  // Hit — cached null
+assert(cache.getMetrics().hits === 1);
 ```
 
-### Verifying Negative Caching
+### Config Change Validation
 
-```javascript
-// Test: Private IPs should be cached as null
-cache.resetMetrics();
-
-cache.get('192.168.1.1');  // Miss - returns null
-cache.get('192.168.1.1');  // Hit - cached null
-
-const metrics = cache.getMetrics();
-assert(metrics.hits === 1);  // Proves null was cached
-```
+1. Edit `src/enrichment/cache.js`
+2. Run: `node test/test-parser.js`
+3. Start app + send traffic, verify `[GeoCache]` hit rate > 80%
+4. Only commit when validation passes
 
 ---
 
 ## Graceful Shutdown
 
 ```javascript
-// From src/enrichment/cache.js:118-124
+// src/enrichment/cache.js — clean up intervals to prevent process hang
 stopMetricsLogging() {
   if (this.metricsInterval) {
     clearInterval(this.metricsInterval);
     this.metricsInterval = null;
-    console.log('Cache metrics logging stopped');
   }
 }
 
-// Called from pipeline shutdown
-shutdown() {
-  this.geoLocator.stopMetricsLogging();
-  console.log('EnrichmentPipeline shutdown');
-}
+// Wired in src/app.js via EnrichmentPipeline.shutdown()
+process.on('SIGINT', () => {
+  enrichmentPipeline.shutdown();  // Calls stopMetricsLogging()
+  server.close();
+  receiver.stop();
+  process.exit(0);
+});
 ```
 
-**Always clean up intervals** to prevent memory leaks and orphaned timers during graceful shutdown.
+**Why:** `setInterval` keeps the event loop alive. Without cleanup, the process hangs on shutdown. See the **node** skill for signal handling patterns.

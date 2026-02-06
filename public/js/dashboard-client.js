@@ -9,6 +9,40 @@
   let eventCount = 0;
   let ocdeFilterActive = false;  // Track OCDE filter state (false = show all, true = OCDE only)
 
+  // Adaptive arc sampler — targets ~5 arcs/sec to keep ~10 visible (2s lifetime)
+  const TARGET_ARCS_PER_SEC = 5;
+  const SAMPLE_WINDOW_MS = 3000;       // Measure rate over 3 seconds
+  let sampleTimestamps = [];            // Ring buffer of recent event timestamps
+  let sampleProbability = 1;            // 1 = show all, 0.1 = show 10%
+
+  /**
+   * Record an incoming event and recalculate sample probability
+   * @returns {boolean} True if this event should render an arc
+   */
+  function shouldRenderArc() {
+    var now = Date.now();
+    sampleTimestamps.push(now);
+
+    // Trim timestamps older than window
+    var cutoff = now - SAMPLE_WINDOW_MS;
+    while (sampleTimestamps.length > 0 && sampleTimestamps[0] < cutoff) {
+      sampleTimestamps.shift();
+    }
+
+    // Calculate incoming rate (events per second)
+    var eventsInWindow = sampleTimestamps.length;
+    var incomingRate = eventsInWindow / (SAMPLE_WINDOW_MS / 1000);
+
+    // Calculate probability: if rate <= target, show all; otherwise scale down
+    if (incomingRate <= TARGET_ARCS_PER_SEC) {
+      sampleProbability = 1;
+    } else {
+      sampleProbability = TARGET_ARCS_PER_SEC / incomingRate;
+    }
+
+    return Math.random() < sampleProbability;
+  }
+
   /**
    * Connect to WebSocket server
    */
@@ -40,6 +74,12 @@
       try {
         const data = JSON.parse(event.data);
 
+        // Handle threat feed updates
+        if (data.type === 'threat-feed' && Array.isArray(data.items)) {
+          if (window.updateThreatTicker) window.updateThreatTicker(data.items);
+          return;
+        }
+
         // Handle batched events (new high-performance mode)
         if (data.type === 'batch' && Array.isArray(data.events)) {
           data.events.forEach(evt => processEvent(evt));
@@ -65,49 +105,41 @@
         return;
       }
 
+      // Always update statistics (all events count, even if arc is sampled out)
+      if (window.updateMetrics) {
+        window.updateMetrics(data);
+      }
+      if (window.updateTopStats) {
+        window.updateTopStats(data);
+      }
+
+      // Add to event log (every 10th event to reduce DOM updates)
+      eventCount++;
+      if (eventCount % 10 === 0 || eventCount < 50) {
+        addEventToLog(data);
+      }
+
+      // Adaptive sampling — only render arc if sampler allows
+      if (!shouldRenderArc()) {
+        return;
+      }
+
       // Create arc on globe
       if (window.addAttackArc) {
         window.addAttackArc(data);
       }
 
-      // Create arc on flat map (always add to both - only visible one will render)
-      if (window.addFlatMapArc) {
-        window.addFlatMapArc(data);
-      }
-
-      // Create arc on D3 flat map (D3.js version)
+      // Create arc on D3 flat map
       if (window.addD3Arc) {
-        // Extract coordinates from geolocation data
         const srcLat = data.geo?.latitude || 0;
         const srcLng = data.geo?.longitude || 0;
-        const dstLat = 33.7490;  // OCDE latitude
-        const dstLng = -117.8705; // OCDE longitude
-
-        // Get country code for color mapping
+        const dstLat = 33.7490;
+        const dstLng = -117.8705;
         const countryCode = data.geo?.country || 'XX';
-
-        // Get country color (shared function)
         const color = window.getCountryColorRgba ?
           window.getCountryColorRgba(countryCode) :
           ['rgba(255, 165, 0, 0.8)', 'rgba(255, 140, 0, 0.8)'];
-
         window.addD3Arc(srcLat, srcLng, dstLat, dstLng, color);
-      }
-
-      // Update statistics
-      if (window.updateMetrics) {
-        window.updateMetrics(data);
-      }
-
-      // Update top statistics (countries and attacks)
-      if (window.updateTopStats) {
-        window.updateTopStats(data);
-      }
-
-      // Add to event log (only add every 10th event to reduce DOM updates)
-      eventCount++;
-      if (eventCount % 10 === 0 || eventCount < 50) {
-        addEventToLog(data);
       }
     }
 
@@ -194,6 +226,12 @@
     setFilterState: (state) => {
       ocdeFilterActive = state;
       console.log('[Filter] State changed to:', state ? 'OCDE only' : 'All attacks');
-    }
+    },
+    getSamplerStats: () => ({
+      probability: sampleProbability,
+      eventsInWindow: sampleTimestamps.length,
+      ratePerSec: (sampleTimestamps.length / (SAMPLE_WINDOW_MS / 1000)).toFixed(1),
+      targetPerSec: TARGET_ARCS_PER_SEC
+    })
   };
 })();

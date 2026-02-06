@@ -276,21 +276,20 @@ body {
   display: none;
 }
 
-/* Event log - compact, bottom left, max 40% of page */
+/* Event log - compact, bottom left, always 1/3 viewport width (above ticker) */
 #event-log {
   position: absolute;
-  bottom: 20px;
+  bottom: 55px;
   left: 20px;
-  width: 40vw;  /* 40% of viewport width for longer entries */
-  max-width: 40vw;  /* Never more than 40% of viewport width */
-  max-height: 25vh;  /* Never more than 25% of viewport height */
+  width: 33.33vw;
+  max-height: none;
   background: rgba(0, 0, 0, 0.9);
   border: 2px solid #00d9ff;
   padding: 10px;
   z-index: 10;
-  overflow-y: auto;
+  overflow: hidden;
   backdrop-filter: blur(5px);
-  font-size: 16px;
+  font-size: 12px;
   box-shadow: 0 0 15px rgba(0, 217, 255, 0.3);
 }
 
@@ -305,10 +304,10 @@ body {
 }
 
 #events-container {
-  font-size: 16px;
-  line-height: 1.2;
-  max-height: calc(25vh - 60px);  /* Account for header and padding */
-  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: calc(12px * 1.4 * 5);  /* 5 lines */
+  overflow: hidden;
 }
 
 .event-item {
@@ -368,11 +367,12 @@ body {
   }
   #event-header { font-size: 26px; }
   #events-container {
-    font-size: 18px;
+    font-size: 14px;
+    max-height: calc(14px * 1.4 * 5);
   }
   #event-log {
-    width: 450px;  /* Slightly larger on HD screens */
-    font-size: 18px;
+    font-size: 14px;
+    bottom: 63px;
   }
 }
 
@@ -384,12 +384,13 @@ body {
   }
   #event-header { font-size: 30px; }
   #events-container {
-    font-size: 20px;
+    font-size: 16px;
+    max-height: calc(16px * 1.4 * 5);
   }
   #event-log {
-    width: 600px;  /* Larger on 4K but still under 25% */
     padding: 15px;
-    font-size: 20px;
+    font-size: 16px;
+    bottom: 75px;
   }
   .event-item {
     margin: 6px 0;

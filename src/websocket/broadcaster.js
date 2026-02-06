@@ -63,4 +63,12 @@ function wireEventBroadcast(webSocketServer) {
   console.log('Event broadcast wired to enriched events');
 }
 
-module.exports = { broadcast, wireEventBroadcast };
+/**
+ * Broadcast threat feed items to all connected clients
+ * @param {Array} items - Current non-expired feed items
+ */
+function broadcastThreatFeed(items) {
+  broadcast({ type: 'threat-feed', items, count: items.length });
+}
+
+module.exports = { broadcast, wireEventBroadcast, broadcastThreatFeed };

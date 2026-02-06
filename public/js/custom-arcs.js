@@ -13,11 +13,6 @@
   let globeInstance = null;
   let coordinateCache = new Map();  // Cache for coordinate conversions
 
-  // Performance tracking for adaptive sampling
-  let arcsAddedLastSecond = 0;
-  let lastSampleResetTime = Date.now();
-  let sampleCounter = 0;
-
   // Arc configuration
   const GLOBE_RADIUS = 100;  // Globe.GL default radius
   const ARC_ALTITUDE_FACTOR = 0.8;  // Height of arc trajectory - ballistic missile style
@@ -29,9 +24,7 @@
   const COUNTRY_FLASH_DELAY = 200;  // Reduced from 300ms
 
   // Performance limits
-  const MAX_ARCS = 150;  // Hard limit on concurrent arcs (was unlimited)
-  const HIGH_VOLUME_THRESHOLD = 100;  // Arcs/second before sampling kicks in
-  const SAMPLE_RATE_HIGH_VOLUME = 10;  // Show 1 in N arcs when over threshold
+  const MAX_ARCS = 10;  // Hard limit on concurrent arcs (kept tight for performance)
 
   // Country/region-based color mapping for visual distinction
   // Colors chosen for NOC visibility and regional grouping
@@ -235,31 +228,6 @@
   }
 
   /**
-   * Check if arc should be sampled (skipped) based on current volume
-   * @returns {boolean} True if arc should be skipped
-   */
-  function shouldSkipArc() {
-    const now = Date.now();
-
-    // Reset counter every second
-    if (now - lastSampleResetTime >= 1000) {
-      arcsAddedLastSecond = sampleCounter;
-      sampleCounter = 0;
-      lastSampleResetTime = now;
-    }
-
-    sampleCounter++;
-
-    // If we're over the high volume threshold, sample
-    if (arcsAddedLastSecond > HIGH_VOLUME_THRESHOLD) {
-      // Only show 1 in SAMPLE_RATE_HIGH_VOLUME arcs
-      return (sampleCounter % SAMPLE_RATE_HIGH_VOLUME) !== 0;
-    }
-
-    return false;
-  }
-
-  /**
    * Add custom animated arc to globe
    * @param {Object} arcData - Arc data object
    * @param {number} arcData.startLat - Starting latitude
@@ -269,11 +237,6 @@
    * @param {string} arcData.threatType - Threat type for coloring
    */
   window.addCustomArc = function(arcData) {
-    // Adaptive sampling - skip arcs when volume is high
-    if (shouldSkipArc()) {
-      return;
-    }
-
     // Enforce hard limit on concurrent arcs
     if (animatingArcs.length >= MAX_ARCS) {
       // Remove oldest arc to make room
@@ -547,14 +510,10 @@
   window.getArcPerformanceStats = function() {
     return {
       activeArcs: animatingArcs.length,
-      maxArcs: MAX_ARCS,
-      arcsPerSecond: arcsAddedLastSecond,
-      highVolumeThreshold: HIGH_VOLUME_THRESHOLD,
-      isSampling: arcsAddedLastSecond > HIGH_VOLUME_THRESHOLD,
-      sampleRate: arcsAddedLastSecond > HIGH_VOLUME_THRESHOLD ? `1:${SAMPLE_RATE_HIGH_VOLUME}` : '1:1'
+      maxArcs: MAX_ARCS
     };
   };
 
-  console.log('Custom arc module loaded - Max:', MAX_ARCS, 'arcs, Sampling at >', HIGH_VOLUME_THRESHOLD, '/sec');
+  console.log('Custom arc module loaded - Max:', MAX_ARCS, 'arcs');
 
 })();

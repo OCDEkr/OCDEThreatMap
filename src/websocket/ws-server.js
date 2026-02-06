@@ -68,6 +68,17 @@ function setupWebSocketServer(httpServer, sessionParser) {
       ws.isAlive = false;
       ws.terminate();
     });
+
+    // Send current threat feed items to newly connected client
+    try {
+      const { getFeedItems } = require('../routes/threat-feed');
+      const items = getFeedItems();
+      if (items.length > 0) {
+        ws.send(JSON.stringify({ type: 'threat-feed', items, count: items.length }));
+      }
+    } catch (err) {
+      // threat-feed module not yet loaded — skip
+    }
   });
 
   // Start heartbeat mechanism

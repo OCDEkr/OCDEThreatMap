@@ -26,7 +26,7 @@
     countriesPanel.id = 'top-countries-panel';
     countriesPanel.style.cssText = `
       position: absolute;
-      bottom: 20px;
+      bottom: 55px;
       right: 20px;
       background: rgba(0, 0, 0, 0.8);
       color: #ff8c00;
@@ -68,7 +68,7 @@
     attacksPanel.id = 'top-attacks-panel';
     attacksPanel.style.cssText = `
       position: absolute;
-      bottom: 20px;
+      bottom: 55px;
       right: 280px;
       background: rgba(0, 0, 0, 0.8);
       color: #ff0000;
@@ -159,10 +159,7 @@
 
       return `
         <div style="margin: 4px 0;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: bold; color: ${textColor}; text-shadow: 0 0 8px ${textColor};">${index + 1}. ${data.name}</span>
-            <span style="color: ${textColor};">${data.count}</span>
-          </div>
+          <div style="font-weight: bold; color: ${textColor}; text-shadow: 0 0 8px ${textColor};">${index + 1}. ${data.name}</div>
           <div style="background: ${barBg}; height: 4px; margin-top: 2px;">
             <div style="background: ${textColor}; height: 100%; width: ${barWidth}%;"></div>
           </div>

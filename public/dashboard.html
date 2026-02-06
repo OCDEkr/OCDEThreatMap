@@ -129,6 +129,7 @@
   <!-- Dashboard integration -->
   <script src="/reconnecting-websocket"></script>
   <script src="/js/dashboard-client.js"></script>
+  <script src="/js/threat-ticker.js"></script>
 
   <!-- Initialize everything -->
   <script>
@@ -147,6 +148,9 @@
 
       // Start performance monitoring (DISABLED - FPS monitor removed per user request)
       // window.startMonitoring();
+
+      // Initialize threat feed ticker
+      window.initThreatTicker();
 
       // Setup view toggle button
       const toggleBtn = document.getElementById('view-toggle');

@@ -12,7 +12,7 @@ const path = require('path');
 const express = require('express');
 const bodyParser = require('body-parser');
 const helmet = require('helmet');
-const { loginLimiter, apiLimiter, passwordChangeLimiter } = require('./middleware/rate-limiter');
+const { loginLimiter, apiLimiter, passwordChangeLimiter, threatFeedLimiter } = require('./middleware/rate-limiter');
 const { SyslogReceiver } = require('./receivers/udp-receiver');
 const eventBus = require('./events/event-bus');
 const { PaloAltoParser } = require('./parsers/palo-alto-parser');
@@ -25,8 +25,9 @@ const logoutRouter = require('./routes/logout');
 const changePasswordRouter = require('./routes/change-password');
 const settingsRouter = require('./routes/settings');
 const logoRouter = require('./routes/logo');
+const threatFeedRouter = require('./routes/threat-feed');
 const { setupWebSocketServer } = require('./websocket/ws-server');
-const { wireEventBroadcast } = require('./websocket/broadcaster');
+const { wireEventBroadcast, broadcastThreatFeed } = require('./websocket/broadcaster');
 
 // Note about privileged ports
 console.log('========================================');
@@ -81,6 +82,7 @@ app.use('/logout', logoutRouter);
 app.use('/api/change-password', passwordChangeLimiter, requireAuth, changePasswordRouter);
 app.use('/api/settings', settingsRouter);  // GET is public, PUT requires auth below
 app.use('/api/logo', logoRouter);  // Logo upload/management
+app.use('/api/threat-feed', threatFeedLimiter, threatFeedRouter);  // GET public, POST API key, DELETE session
 
 // Public dashboard route (no authentication required)
 app.get('/dashboard', (req, res) => {
@@ -208,6 +210,10 @@ async function start() {
 
     // Wire broadcast to enriched events
     wireEventBroadcast(wss);
+
+    // Wire threat feed broadcast function
+    const { setBroadcastFn } = require('./routes/threat-feed');
+    setBroadcastFn(broadcastThreatFeed);
 
     // Start the syslog receiver
     const addr = await receiver.listen();

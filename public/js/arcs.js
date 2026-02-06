@@ -9,8 +9,8 @@
 
   // Arc storage and configuration
   let arcs = [];
-  const MAX_ARCS = 500;              // Maximum concurrent arcs for performance
-  const ARC_LIFETIME = 1500;         // Arc lifetime in milliseconds (1.5 seconds)
+  const MAX_ARCS = 10;               // Maximum concurrent arcs (matches custom-arcs.js)
+  const ARC_LIFETIME = 2000;         // Arc lifetime in milliseconds (matches custom arc duration)
 
   // Threat-type color mapping
   const THREAT_COLORS = {
@@ -165,6 +165,6 @@
     };
   };
 
-  console.log('Arc animation module loaded - Max arcs:', MAX_ARCS, 'Lifetime:', ARC_LIFETIME + 'ms');
+  console.log('Arc module loaded - Max:', MAX_ARCS, 'arcs, Lifetime:', ARC_LIFETIME + 'ms');
 
 })();

@@ -71,8 +71,25 @@ const passwordChangeLimiter = rateLimit({
   keyGenerator: (req) => getClientIP(req)
 });
 
+/**
+ * Threat feed rate limiter
+ * 10 requests per minute per IP
+ */
+const threatFeedLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // 10 requests per minute
+  message: {
+    success: false,
+    error: 'Too many threat feed requests. Please slow down.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => getClientIP(req)
+});
+
 module.exports = {
   loginLimiter,
   apiLimiter,
-  passwordChangeLimiter
+  passwordChangeLimiter,
+  threatFeedLimiter
 };

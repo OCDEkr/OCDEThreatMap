@@ -9,8 +9,10 @@
   let eventCount = 0;
   let ocdeFilterActive = false;  // Track OCDE filter state (false = show all, true = OCDE only)
 
-  // Adaptive arc sampler — targets ~5 arcs/sec to keep ~10 visible (2s lifetime)
-  const TARGET_ARCS_PER_SEC = 5;
+  // Adaptive arc sampler — targets maxArcs/2 arcs/sec to keep ~maxArcs visible (2s lifetime)
+  const ARC_LIFETIME_SEC = 2;           // Arc lifetime in seconds (matches custom-arcs.js)
+  let maxArcs = 20;                     // Default, updated from server settings
+  let TARGET_ARCS_PER_SEC = maxArcs / ARC_LIFETIME_SEC;  // 10 arcs/sec for 20 max
   const SAMPLE_WINDOW_MS = 3000;       // Measure rate over 3 seconds
   let sampleTimestamps = [];            // Ring buffer of recent event timestamps
   let sampleProbability = 1;            // 1 = show all, 0.1 = show 10%
@@ -41,6 +43,39 @@
     }
 
     return Math.random() < sampleProbability;
+  }
+
+  /**
+   * Apply settings (maxArcs) from server to arc modules and sampler
+   * @param {Object} settings - Settings object from server
+   */
+  function applySettings(settings) {
+    if (settings.maxArcs !== undefined) {
+      var n = parseInt(settings.maxArcs, 10);
+      if (n >= 1 && n <= 50) {
+        maxArcs = n;
+        TARGET_ARCS_PER_SEC = maxArcs / ARC_LIFETIME_SEC;
+        if (window.setMaxArcs) window.setMaxArcs(n);
+        if (window.setMaxArcsLimit) window.setMaxArcsLimit(n);
+        console.log('[Settings] maxArcs updated to', n, '(target', TARGET_ARCS_PER_SEC, 'arcs/sec)');
+      }
+    }
+  }
+
+  /**
+   * Fetch initial settings from server
+   */
+  function fetchSettings() {
+    fetch('/api/settings')
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.success && data.settings) {
+          applySettings(data.settings);
+        }
+      })
+      .catch(function(err) {
+        console.error('Failed to fetch settings:', err);
+      });
   }
 
   /**
@@ -77,6 +112,12 @@
         // Handle threat feed updates
         if (data.type === 'threat-feed' && Array.isArray(data.items)) {
           if (window.updateThreatTicker) window.updateThreatTicker(data.items);
+          return;
+        }
+
+        // Handle settings updates (maxArcs changes from admin panel)
+        if (data.type === 'settings-update' && data.settings) {
+          applySettings(data.settings);
           return;
         }
 
@@ -214,6 +255,7 @@
 
   // Initialize on page load
   document.addEventListener('DOMContentLoaded', () => {
+    fetchSettings();
     updateConnectionStatus('connecting');
     connect();
   });

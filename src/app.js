@@ -27,7 +27,7 @@ const settingsRouter = require('./routes/settings');
 const logoRouter = require('./routes/logo');
 const threatFeedRouter = require('./routes/threat-feed');
 const { setupWebSocketServer } = require('./websocket/ws-server');
-const { wireEventBroadcast, broadcastThreatFeed } = require('./websocket/broadcaster');
+const { wireEventBroadcast, broadcastThreatFeed, broadcastSettings } = require('./websocket/broadcaster');
 
 // Note about privileged ports
 console.log('========================================');
@@ -214,6 +214,10 @@ async function start() {
     // Wire threat feed broadcast function
     const { setBroadcastFn } = require('./routes/threat-feed');
     setBroadcastFn(broadcastThreatFeed);
+
+    // Wire settings broadcast function
+    const { setSettingsBroadcastFn } = require('./routes/settings');
+    setSettingsBroadcastFn(broadcastSettings);
 
     // Start the syslog receiver
     const addr = await receiver.listen();

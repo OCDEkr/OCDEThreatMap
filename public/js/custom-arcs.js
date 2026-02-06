@@ -24,7 +24,7 @@
   const COUNTRY_FLASH_DELAY = 200;  // Reduced from 300ms
 
   // Performance limits
-  const MAX_ARCS = 10;  // Hard limit on concurrent arcs (kept tight for performance)
+  let MAX_ARCS = 20;  // Hard limit on concurrent arcs (configurable via admin panel, 1-50)
 
   // Country/region-based color mapping for visual distinction
   // Colors chosen for NOC visibility and regional grouping
@@ -501,6 +501,18 @@
    */
   window.getCustomArcCount = function() {
     return animatingArcs.length;
+  };
+
+  /**
+   * Set maximum concurrent arcs (called from dashboard-client on settings update)
+   * @param {number} n - New max arcs (1-50)
+   */
+  window.setMaxArcs = function(n) {
+    const val = parseInt(n, 10);
+    if (val >= 1 && val <= 50) {
+      MAX_ARCS = val;
+      console.log('[CustomArcs] Max arcs set to', MAX_ARCS);
+    }
   };
 
   /**

@@ -9,7 +9,7 @@
 
   // Arc storage and configuration
   let arcs = [];
-  const MAX_ARCS = 10;               // Maximum concurrent arcs (matches custom-arcs.js)
+  let MAX_ARCS = 20;                  // Maximum concurrent arcs (matches custom-arcs.js)
   const ARC_LIFETIME = 2000;         // Arc lifetime in milliseconds (matches custom arc duration)
 
   // Threat-type color mapping
@@ -150,6 +150,17 @@
    */
   window.getArcCount = function() {
     return arcs.length;
+  };
+
+  /**
+   * Set maximum concurrent arcs (called from dashboard-client on settings update)
+   * @param {number} n - New max arcs (1-50)
+   */
+  window.setMaxArcsLimit = function(n) {
+    const val = parseInt(n, 10);
+    if (val >= 1 && val <= 50) {
+      MAX_ARCS = val;
+    }
   };
 
   /**

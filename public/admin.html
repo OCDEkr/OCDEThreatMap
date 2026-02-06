@@ -556,6 +556,34 @@
       </div>
     </div>
 
+    <!-- Display Settings Section -->
+    <div class="settings-section">
+      <div class="section-toggle" onclick="toggleSection('display-section')">
+        <h2>DISPLAY SETTINGS</h2>
+        <span class="toggle-icon">▼</span>
+      </div>
+      <div id="display-section" class="section-content">
+        <div class="settings-panel">
+          <h3>Arc Display Limit</h3>
+          <p style="color: #888; margin-bottom: 15px; font-size: 0.9em;">Controls the maximum number of attack arcs visible at once on the globe and flat map. Changes apply immediately to all connected dashboards.</p>
+          <form id="max-arcs-form">
+            <div class="form-group">
+              <label for="max-arcs-slider">Max Arcs: <span id="max-arcs-value" style="color: #00d9ff; font-weight: bold;">20</span></label>
+              <div style="display: flex; align-items: center; gap: 10px; max-width: 400px;">
+                <span style="color: #888;">1</span>
+                <input type="range" id="max-arcs-slider" name="maxArcs" min="1" max="50" value="20" style="flex: 1; accent-color: #00d9ff; cursor: pointer;">
+                <span style="color: #888;">50</span>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary">Apply Arc Limit</button>
+            </div>
+            <div id="max-arcs-message" class="message"></div>
+          </form>
+        </div>
+      </div>
+    </div>
+
     <!-- Network Settings Section -->
     <div class="settings-section">
       <div class="section-toggle" onclick="toggleSection('network-section')">
@@ -802,6 +830,12 @@
         if (data.success && data.settings) {
           // Populate heading field
           document.getElementById('dashboard-heading').value = data.settings.heading || '';
+
+          // Populate display settings
+          if (data.settings.maxArcs !== undefined) {
+            document.getElementById('max-arcs-slider').value = data.settings.maxArcs;
+            document.getElementById('max-arcs-value').textContent = data.settings.maxArcs;
+          }
 
           // Populate network settings
           document.getElementById('http-bind-address').value = data.settings.httpBindAddress || '127.0.0.1';
@@ -1055,6 +1089,50 @@
         }
       } catch (err) {
         console.error('Password change error:', err);
+        messageEl.textContent = 'Connection error - please try again';
+        messageEl.className = 'message error';
+      }
+    });
+
+    // Live slider value display
+    document.getElementById('max-arcs-slider').addEventListener('input', (e) => {
+      document.getElementById('max-arcs-value').textContent = e.target.value;
+    });
+
+    // Handle max arcs form
+    document.getElementById('max-arcs-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const maxArcs = parseInt(document.getElementById('max-arcs-slider').value, 10);
+      const messageEl = document.getElementById('max-arcs-message');
+
+      messageEl.className = 'message';
+      messageEl.style.display = 'none';
+
+      if (maxArcs < 1 || maxArcs > 50) {
+        messageEl.textContent = 'Value must be between 1 and 50';
+        messageEl.className = 'message error';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maxArcs })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          messageEl.textContent = `Arc limit set to ${maxArcs}. Applied to all dashboards.`;
+          messageEl.className = 'message success';
+        } else {
+          messageEl.textContent = data.error || 'Failed to update arc limit';
+          messageEl.className = 'message error';
+        }
+      } catch (err) {
+        console.error('Arc limit update error:', err);
         messageEl.textContent = 'Connection error - please try again';
         messageEl.className = 'message error';
       }

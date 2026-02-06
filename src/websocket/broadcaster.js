@@ -71,4 +71,12 @@ function broadcastThreatFeed(items) {
   broadcast({ type: 'threat-feed', items, count: items.length });
 }
 
-module.exports = { broadcast, wireEventBroadcast, broadcastThreatFeed };
+/**
+ * Broadcast settings update to all connected dashboard clients
+ * @param {Object} settings - Updated settings object
+ */
+function broadcastSettings(settings) {
+  broadcast({ type: 'settings-update', settings });
+}
+
+module.exports = { broadcast, wireEventBroadcast, broadcastThreatFeed, broadcastSettings };

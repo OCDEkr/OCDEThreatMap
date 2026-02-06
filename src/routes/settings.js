@@ -7,6 +7,9 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth-check');
 
+// Reference to broadcast function (set via setBroadcastFn)
+let broadcastFn = null;
+
 // In-memory settings storage (persists until server restart)
 const settings = {
   heading: 'OCDE Threat Map',
@@ -15,6 +18,8 @@ const settings = {
   syslogBindAddress: '127.0.0.1',    // Default to localhost for security
   httpPort: 3000,
   syslogPort: 514,
+  // Display settings (applied live via WebSocket broadcast)
+  maxArcs: 20,                       // Max arcs displayed at once (1-50)
 };
 
 /**
@@ -58,16 +63,35 @@ router.put('/', requireAuth, (req, res) => {
   const updates = req.body;
   const updated = [];
 
+  // Display settings that should be broadcast to dashboard clients
+  const DISPLAY_SETTINGS = ['maxArcs'];
+
   // Only update known settings
+  let hasDisplayChange = false;
   for (const [key, value] of Object.entries(updates)) {
     if (settings.hasOwnProperty(key)) {
-      settings[key] = value;
+      // Validate maxArcs range
+      if (key === 'maxArcs') {
+        const n = parseInt(value, 10);
+        if (isNaN(n) || n < 1 || n > 50) {
+          continue; // Skip invalid maxArcs values
+        }
+        settings[key] = n;
+      } else {
+        settings[key] = value;
+      }
       updated.push(key);
-      console.log(`[Settings] Updated ${key}: ${value}`);
+      if (DISPLAY_SETTINGS.includes(key)) hasDisplayChange = true;
+      console.log(`[Settings] Updated ${key}: ${settings[key]}`);
     }
   }
 
   if (updated.length > 0) {
+    // Broadcast display setting changes to dashboard clients
+    if (hasDisplayChange && broadcastFn) {
+      broadcastFn(settings);
+    }
+
     res.json({
       success: true,
       message: `Updated settings: ${updated.join(', ')}`,
@@ -116,3 +140,4 @@ router.put('/:key', requireAuth, (req, res) => {
 
 module.exports = router;
 module.exports.getSettings = () => settings;
+module.exports.setSettingsBroadcastFn = (fn) => { broadcastFn = fn; };
